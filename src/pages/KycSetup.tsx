@@ -53,18 +53,27 @@ export default function KycSetup() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user) return;
     triggerHapticImpact();
     setLoading(true);
     setError(null);
 
     try {
+      // 0. Ensure active session exists in supabase client
+      const { data: { session } } = await supabase.auth.getSession();
+      const activeUser = session?.user || user;
+
+      if (!activeUser) {
+        setError('No active session found. Please sign in again.');
+        navigate('/login', { replace: true });
+        return;
+      }
+
       let documentUrl = technicianProfile?.id_document_url || null;
 
       // 1. Upload ID document to private bucket if selected
       if (file) {
         const fileExt = file.name.split('.').pop();
-        const filePath = `${user.id}/${Date.now()}.${fileExt}`;
+        const filePath = `${activeUser.id}/${Date.now()}.${fileExt}`;
         
         const { error: uploadError } = await supabase.storage
           .from('kyc-documents')
@@ -75,17 +84,33 @@ export default function KycSetup() {
         }
       }
 
-      // 2. Save technician profile with pre-approval so user can test and receive jobs immediately!
+      // 2. Try atomic RPC first (Security Definer avoids RLS conflicts & updates role to technician)
+      const { data: rpcData, error: rpcError } = await supabase.rpc('save_technician_kyc', {
+        p_skills: selectedTrades,
+        p_experience_years: experienceYears,
+        p_id_type: idType,
+        p_id_number: idNumber,
+        p_id_document_url: documentUrl,
+        p_bank_upi_id: upiId,
+      });
+
+      if (!rpcError && rpcData?.success) {
+        await fetchProfiles(activeUser.id);
+        navigate('/', { replace: true });
+        return;
+      }
+
+      // Fallback: direct upsert
       const payload = {
-        id: user.id,
+        id: activeUser.id,
         skills: selectedTrades,
         experience_years: experienceYears,
         id_type: idType,
         id_number: idNumber,
         id_document_url: documentUrl,
         bank_upi_id: upiId,
-        verification_status: 'approved', // Pre-approved for instant partner onboarding
-        is_online: true, // Go online right away!
+        verification_status: 'approved',
+        is_online: true,
         updated_at: new Date().toISOString(),
       };
 
@@ -95,7 +120,7 @@ export default function KycSetup() {
 
       if (upsertError) throw upsertError;
 
-      await fetchProfiles(user.id);
+      await fetchProfiles(activeUser.id);
       navigate('/', { replace: true });
     } catch (err: any) {
       setError(err.message || 'Failed to save KYC configuration');

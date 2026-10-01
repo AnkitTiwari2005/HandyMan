@@ -63,6 +63,12 @@ CREATE TABLE IF NOT EXISTS public.technician_reviews (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- 4.1 GRANTS FOR AUTHENTICATED PARTNERS
+GRANT USAGE ON SCHEMA public TO anon, authenticated;
+GRANT ALL ON public.technician_profiles TO anon, authenticated, service_role;
+GRANT ALL ON public.technician_payouts TO anon, authenticated, service_role;
+GRANT ALL ON public.technician_reviews TO anon, authenticated, service_role;
+
 -- 5. ROW-LEVEL SECURITY UPDATES
 ALTER TABLE public.technician_profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.technician_payouts ENABLE ROW LEVEL SECURITY;
@@ -71,7 +77,11 @@ ALTER TABLE public.technician_reviews ENABLE ROW LEVEL SECURITY;
 -- Technician Profiles RLS
 DROP POLICY IF EXISTS "Technicians can manage own profile" ON public.technician_profiles;
 CREATE POLICY "Technicians can manage own profile" ON public.technician_profiles
-  FOR ALL USING (auth.uid() = id) WITH CHECK (auth.uid() = id);
+  FOR ALL TO authenticated USING (auth.uid() = id) WITH CHECK (auth.uid() = id);
+
+DROP POLICY IF EXISTS "Allow authenticated insert for technician_profiles" ON public.technician_profiles;
+CREATE POLICY "Allow authenticated insert for technician_profiles" ON public.technician_profiles
+  FOR INSERT TO authenticated WITH CHECK (auth.uid() = id);
 
 DROP POLICY IF EXISTS "Public can view active technician ratings" ON public.technician_profiles;
 CREATE POLICY "Public can view active technician ratings" ON public.technician_profiles
@@ -256,3 +266,66 @@ BEGIN
   RETURN jsonb_build_object('success', true, 'message', 'Job marked completed and wallet credited!', 'credited_amount', v_earnings);
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- 9. ATOMIC SAVE TECHNICIAN KYC RPC (Security Definer)
+CREATE OR REPLACE FUNCTION public.save_technician_kyc(
+  p_skills TEXT[],
+  p_experience_years INTEGER,
+  p_id_type TEXT,
+  p_id_number TEXT,
+  p_id_document_url TEXT DEFAULT NULL,
+  p_bank_upi_id TEXT DEFAULT NULL
+)
+RETURNS JSONB AS $$
+DECLARE
+  v_user_id UUID := auth.uid();
+BEGIN
+  IF v_user_id IS NULL THEN
+    RETURN jsonb_build_object('success', false, 'message', 'Authentication required. Please log in.');
+  END IF;
+
+  -- Ensure profile role is technician
+  UPDATE public.profiles
+  SET role = 'technician', updated_at = NOW()
+  WHERE id = v_user_id;
+
+  -- Upsert technician profile record
+  INSERT INTO public.technician_profiles (
+    id,
+    skills,
+    experience_years,
+    id_type,
+    id_number,
+    id_document_url,
+    bank_upi_id,
+    verification_status,
+    is_online,
+    updated_at
+  )
+  VALUES (
+    v_user_id,
+    p_skills,
+    p_experience_years,
+    p_id_type,
+    p_id_number,
+    p_id_document_url,
+    p_bank_upi_id,
+    'approved',
+    true,
+    NOW()
+  )
+  ON CONFLICT (id) DO UPDATE SET
+    skills = EXCLUDED.skills,
+    experience_years = EXCLUDED.experience_years,
+    id_type = EXCLUDED.id_type,
+    id_number = EXCLUDED.id_number,
+    id_document_url = COALESCE(EXCLUDED.id_document_url, technician_profiles.id_document_url),
+    bank_upi_id = COALESCE(EXCLUDED.bank_upi_id, technician_profiles.bank_upi_id),
+    verification_status = 'approved',
+    is_online = true,
+    updated_at = NOW();
+
+  RETURN jsonb_build_object('success', true, 'message', 'Profile and trades saved successfully!');
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+

@@ -10,7 +10,6 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     persistSession: true,
     autoRefreshToken: true,
     detectSessionInUrl: true,
-    storageKey: 'handyman-auth-token',
   },
   realtime: {
     params: {
