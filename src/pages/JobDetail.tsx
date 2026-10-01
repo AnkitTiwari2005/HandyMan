@@ -215,7 +215,7 @@ export default function JobDetail() {
       return;
     }
 
-    // Celebration 🎉
+    // Celebration
     void confetti({ particleCount: 120, spread: 80, origin: { y: 0.6 } });
     playSuccessChime();
     void triggerHapticNotification();

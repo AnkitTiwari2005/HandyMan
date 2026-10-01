@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { ArrowDownLeft, ArrowUpRight, Wallet as WalletIcon, CheckCircle2, ReceiptText } from 'lucide-react';
+import { ArrowDownLeft, ArrowUpRight, Wallet as WalletIcon, CheckCircle2, ReceiptText, AlertTriangle } from 'lucide-react';
 import {
   Button, Card, Badge, SectionHeader, SkeletonCard,
   EmptyState, ErrorBanner, StatCard, MoneyDisplay, Input, ModalBackdrop,
@@ -242,7 +242,12 @@ export default function Wallet() {
               <h2 className="text-lg font-bold text-ink">Withdraw Balance</h2>
               {upiId
                 ? <p className="text-xs text-ink-3 mt-1">Funds will be sent to <span className="font-mono text-ink-2">{upiId}</span></p>
-                : <p className="text-xs text-warn mt-1">⚠ No UPI linked — add one in Profile first.</p>
+                : (
+                  <p className="inline-flex items-center gap-1.5 text-xs text-warn mt-1">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                    No UPI linked — add one in Profile first.
+                  </p>
+                )
               }
             </div>
 

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { MapPin, Clock, CalendarDays, Timer, X, Zap, ArrowRight } from 'lucide-react';
+import { MapPin, Clock, CalendarDays, Timer, X, Zap, ArrowRight, Coins, AlertCircle } from 'lucide-react';
 import { useRadarStore, OFFER_TIMEOUT_SECONDS } from '../stores/radarStore';
 import { formatDay, formatMoney, payoutFor } from '../lib/format';
 import { Badge, Button } from './ui';
@@ -118,7 +118,7 @@ export default function IncomingJobModal() {
                 <p className="text-xs text-ink-3 mt-1.5">Order {formatMoney(offer.subtotal)} · paid online</p>
               </div>
               <div className="w-14 h-14 rounded-2xl bg-money/10 border border-money/20 flex items-center justify-center shrink-0">
-                <span className="text-2xl">💰</span>
+                <Coins className="w-7 h-7 text-money" aria-hidden />
               </div>
             </div>
 
@@ -171,7 +171,7 @@ export default function IncomingJobModal() {
             {/* Claim error */}
             {hasFailed && (
               <div role="alert" className="flex items-start gap-3 rounded-xl bg-danger-soft border border-danger/25 p-3.5">
-                <span className="text-base shrink-0">⚠️</span>
+                <AlertCircle className="w-4 h-4 text-danger shrink-0 mt-0.5" aria-hidden />
                 <p className="text-sm text-ink">{claimError}</p>
               </div>
             )}

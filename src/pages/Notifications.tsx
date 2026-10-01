@@ -9,6 +9,12 @@ import { supabase } from '../lib/supabase';
 import { formatDateTime } from '../lib/format';
 import type { NotificationItem } from '../types';
 
+// Regex to strip all emojis and special decorative pictographs
+const EMOJI_REGEX = /[\u{1F000}-\u{1FFFF}\u{2600}-\u{27BF}\u{2B50}\u{FE0F}]/gu;
+function cleanText(text: string): string {
+  return (text || '').replace(EMOJI_REGEX, '').replace(/\s{2,}/g, ' ').trim();
+}
+
 // Helper to determine if a notification is a customer receipt
 function isCustomerReceipt(n: NotificationItem): boolean {
   const title = (n.title || '').toLowerCase();
@@ -279,10 +285,10 @@ export default function Notifications() {
                     </div>
 
                     <p className={`text-sm leading-snug ${isUnread ? 'font-bold text-ink' : 'font-semibold text-ink-2'}`}>
-                      {item.title}
+                      {cleanText(item.title)}
                     </p>
                     <p className="text-xs text-ink-3 mt-1 leading-relaxed line-clamp-2">
-                      {item.body}
+                      {cleanText(item.body)}
                     </p>
                   </div>
 

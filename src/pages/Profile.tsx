@@ -142,7 +142,15 @@ export default function Profile() {
       <div className="grid grid-cols-3 gap-3 px-4 -mt-7 relative z-10">
         {[
           { label: 'Jobs Done',  value: String(jobsDone) },
-          { label: 'Rating',     value: <>⭐ {Number(rating).toFixed(1)}</> },
+          {
+            label: 'Rating',
+            value: (
+              <span className="inline-flex items-center gap-1">
+                <Star className="w-4 h-4 text-amber-400 fill-amber-400" />
+                {Number(rating).toFixed(1)}
+              </span>
+            ),
+          },
           { label: 'Exp. (yrs)', value: String(expYears) },
         ].map((stat) => (
           <div key={stat.label} className="rounded-2xl bg-card border border-line p-3.5 text-center shadow-lg">
@@ -210,7 +218,7 @@ export default function Profile() {
           onClick={handleSave}
           icon={saveSuccess ? <CheckCircle2 className="w-4 h-4 text-white" /> : undefined}
         >
-          {saveSuccess ? 'Changes Saved! ✓' : 'Save Changes'}
+          {saveSuccess ? 'Changes Saved!' : 'Save Changes'}
         </Button>
 
         {/* Linked Payout */}

@@ -1,5 +1,5 @@
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, TextareaHTMLAttributes } from 'react';
-import { Loader2, AlertCircle, RefreshCw, Info } from 'lucide-react';
+import { Loader2, AlertCircle, RefreshCw, Info, Check } from 'lucide-react';
 
 /* ══════════════════════════════════════════════════════════════
    HANDYMAN UI COMPONENT LIBRARY
@@ -393,7 +393,9 @@ export function Chip({
       {icon && <span className="w-4 h-4">{icon}</span>}
       {label}
       {selected && (
-        <span className="w-4 h-4 rounded-full bg-brand text-white flex items-center justify-center text-[9px] font-bold">✓</span>
+        <span className="w-4 h-4 rounded-full bg-brand text-white flex items-center justify-center shrink-0">
+          <Check className="w-2.5 h-2.5 stroke-[3]" />
+        </span>
       )}
     </button>
   );
