@@ -1,209 +1,142 @@
-import { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { MapPin, Clock, Calendar, CheckCircle2, XCircle, IndianRupee, Sparkles, Loader2 } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useRadarStore } from '../stores/radarStore';
-import { useAuthStore } from '../stores/authStore';
-
-const OFFER_TIMEOUT_SECONDS = 45;
+import { MapPin, Clock, CalendarDays, Timer, AlertCircle } from 'lucide-react';
+import { useRadarStore, OFFER_TIMEOUT_SECONDS } from '../stores/radarStore';
+import { formatDay, formatMoney, payoutFor } from '../lib/format';
+import { Button, Badge } from './ui';
 
 export default function IncomingJobModal() {
   const navigate = useNavigate();
-  const { incomingOffer, claimJob, declineOffer, isClaiming, claimError } = useRadarStore();
-  const { user } = useAuthStore();
-  const [timeLeft, setTimeLeft] = useState(OFFER_TIMEOUT_SECONDS);
+  const offer = useRadarStore((s) => s.incomingOffer);
+  const deadline = useRadarStore((s) => s.offerDeadline);
+  const queueLength = useRadarStore((s) => s.offerQueue.length);
+  const isClaiming = useRadarStore((s) => s.isClaiming);
+  const claimError = useRadarStore((s) => s.claimError);
+  const claimJob = useRadarStore((s) => s.claimJob);
+  const declineOffer = useRadarStore((s) => s.declineOffer);
+  const [now, setNow] = useState(() => Date.now());
+
+  // Remaining time is derived from a deadline, not decremented, so a throttled
+  // background tab can't make the countdown drift.
+  useEffect(() => {
+    if (!deadline) return;
+    setNow(Date.now());
+    const tick = window.setInterval(() => setNow(Date.now()), 250);
+    const onVisible = () => setNow(Date.now());
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { window.clearInterval(tick); document.removeEventListener('visibilitychange', onVisible); };
+  }, [deadline]);
+
+  const remaining = deadline ? Math.max(0, Math.ceil((deadline - now) / 1000)) : 0;
 
   useEffect(() => {
-    if (!incomingOffer) {
-      setTimeLeft(OFFER_TIMEOUT_SECONDS);
-      return;
-    }
+    if (offer && deadline && remaining === 0 && !isClaiming) declineOffer(offer.id);
+  }, [offer, deadline, remaining, isClaiming, declineOffer]);
 
-    setTimeLeft(OFFER_TIMEOUT_SECONDS);
-    const interval = setInterval(() => {
-      setTimeLeft((prev) => {
-        if (prev <= 1) {
-          clearInterval(interval);
-          declineOffer(incomingOffer.id);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
+  if (!offer) return null;
 
-    return () => clearInterval(interval);
-  }, [incomingOffer, declineOffer]);
-
-  if (!incomingOffer) return null;
-
-  const estimatedEarnings = Math.round(incomingOffer.subtotal * 0.8);
-  const primaryService = incomingOffer.services?.name || 'Home Maintenance';
-  const category = incomingOffer.services?.category || 'Service';
-  const address = incomingOffer.address_snapshot;
-  const progressPercent = (timeLeft / OFFER_TIMEOUT_SECONDS) * 100;
+  const payout = payoutFor(offer);
+  const address = offer.address_snapshot;
+  const extraItems = (offer.booking_items?.length ?? 0) - 1;
+  const urgent = remaining <= 10;
+  const failed = Boolean(claimError);
 
   const handleAccept = async () => {
-    if (!user) return;
-    const res = await claimJob(incomingOffer.id, user.id);
-    if (res.success) {
-      navigate(`/job/${incomingOffer.id}`);
-    }
-  };
-
-  const handleDecline = () => {
-    declineOffer(incomingOffer.id);
+    const res = await claimJob(offer.id);
+    if (res.success) navigate(`/job/${offer.id}`);
   };
 
   return (
-    <AnimatePresence>
-      <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-950/80 backdrop-blur-md">
-        <motion.div
-          initial={{ y: '100%', opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          exit={{ y: '100%', opacity: 0 }}
-          transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-          className="w-full max-w-lg bg-slate-900 border border-orange-500/40 rounded-t-3xl sm:rounded-3xl overflow-hidden shadow-2xl shadow-orange-500/10 flex flex-col max-h-[90vh]"
-        >
-          {/* Header Progress Bar */}
-          <div className="w-full bg-slate-800 h-1.5 overflow-hidden">
-            <motion.div
-              className="h-full bg-gradient-to-r from-amber-500 to-orange-500"
-              style={{ width: `${progressPercent}%` }}
-              transition={{ ease: 'linear', duration: 1 }}
-            />
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 backdrop-blur-sm" role="presentation">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="offer-title"
+        className="w-full max-w-lg bg-card border-t border-line rounded-t-3xl overflow-hidden flex flex-col max-h-[92dvh]"
+      >
+        {/* countdown */}
+        <div className="h-1.5 bg-card-2" aria-hidden>
+          <div
+            className={`h-full ${urgent ? 'bg-danger' : 'bg-brand'} transition-[width] duration-300 ease-linear`}
+            style={{ width: `${(remaining / OFFER_TIMEOUT_SECONDS) * 100}%` }}
+          />
+        </div>
+
+        <div className="px-5 pt-4 pb-3 flex items-center justify-between">
+          <p className="text-sm font-semibold text-brand">
+            New job request{queueLength > 1 ? ` · ${queueLength - 1} more waiting` : ''}
+          </p>
+          <span
+            role="timer"
+            aria-label={`${remaining} seconds left to respond`}
+            className={`inline-flex items-center gap-1.5 text-sm font-bold ${urgent ? 'text-danger' : 'text-ink-2'}`}
+          >
+            <Timer className="w-4 h-4" aria-hidden /> {remaining}s
+          </span>
+        </div>
+
+        <div className="px-5 pb-4 overflow-y-auto space-y-4">
+          {/* what you earn: the one number that matters */}
+          <div className="rounded-2xl bg-money/10 border border-money/30 p-4">
+            <p className="text-sm text-ink-2">You will earn</p>
+            <p className="text-4xl font-bold text-money leading-tight">{formatMoney(payout)}</p>
+            <p className="text-sm text-ink-3 mt-1">
+              Order value {formatMoney(offer.subtotal)} · paid online by customer
+            </p>
           </div>
 
-          {/* Modal Header */}
-          <div className="p-4 bg-gradient-to-b from-orange-500/10 to-transparent border-b border-slate-800/80 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-orange-400 animate-ping" />
-              <span className="font-syne font-bold text-sm tracking-wide text-orange-400 uppercase">
-                Incoming Job Request
-              </span>
-            </div>
-            {/* Timer Badge */}
-            <div className="flex items-center gap-1.5 px-3 py-1 bg-slate-800/90 rounded-full border border-slate-700">
-              <Clock className="w-3.5 h-3.5 text-orange-400" />
-              <span className="text-xs font-mono font-bold text-slate-200">
-                {timeLeft}s
-              </span>
-            </div>
+          <div>
+            <Badge tone="brand">{offer.services?.category ?? 'Service'}</Badge>
+            <h2 id="offer-title" className="text-xl font-bold text-ink mt-2 leading-snug">
+              {offer.services?.name ?? 'Home service'}
+            </h2>
+            {extraItems > 0 && <p className="text-sm text-ink-2 mt-0.5">+ {extraItems} more service{extraItems > 1 ? 's' : ''} in this order</p>}
           </div>
 
-          {/* Body Content */}
-          <div className="p-5 overflow-y-auto space-y-4">
-            {/* Earnings Hero Banner */}
-            <div className="p-4 rounded-2xl bg-gradient-to-r from-emerald-950/70 to-slate-900 border border-emerald-500/30 flex items-center justify-between shadow-inner">
+          <ul className="space-y-3">
+            <li className="flex items-start gap-3">
+              <CalendarDays className="w-5 h-5 text-ink-3 mt-0.5 shrink-0" aria-hidden />
               <div>
-                <p className="text-xs font-syne text-emerald-400 font-semibold uppercase tracking-wider">
-                  Partner Payout (80%)
+                <p className="text-base font-semibold text-ink">{formatDay(offer.scheduled_date)}</p>
+                <p className="text-sm text-ink-2 flex items-center gap-1"><Clock className="w-3.5 h-3.5" aria-hidden />{offer.scheduled_time}</p>
+              </div>
+            </li>
+            <li className="flex items-start gap-3">
+              <MapPin className="w-5 h-5 text-ink-3 mt-0.5 shrink-0" aria-hidden />
+              <div>
+                <p className="text-base font-semibold text-ink">
+                  {[address?.city, address?.pincode].filter(Boolean).join(' · ') || 'Locality shared after accepting'}
                 </p>
-                <div className="flex items-baseline gap-1 mt-0.5">
-                  <span className="text-3xl font-mono font-bold text-white tracking-tight">
-                    ₹{estimatedEarnings}
-                  </span>
-                  <span className="text-xs text-slate-400 line-through">
-                    ₹{incomingOffer.subtotal}
-                  </span>
-                </div>
+                <p className="text-sm text-ink-2">{address?.landmark || 'Exact address is shown after you accept'}</p>
               </div>
-              <div className="px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-syne font-bold flex items-center gap-1">
-                <Sparkles className="w-3.5 h-3.5" />
-                <span>Prepaid Order</span>
-              </div>
+            </li>
+          </ul>
+
+          {offer.special_instructions && (
+            <div className="rounded-2xl bg-warn/10 border border-warn/30 p-3.5 text-sm text-ink">
+              <span className="font-semibold text-warn">Customer note: </span>{offer.special_instructions}
             </div>
+          )}
 
-            {/* Service Title & Category */}
-            <div>
-              <div className="inline-block px-2.5 py-0.5 rounded-md text-[11px] font-syne font-bold bg-orange-500/10 text-orange-400 border border-orange-500/20 mb-1.5">
-                {category}
-              </div>
-              <h3 className="text-xl font-syne font-bold text-white leading-snug">
-                {primaryService}
-              </h3>
-              {incomingOffer.booking_items && incomingOffer.booking_items.length > 1 && (
-                <p className="text-xs text-slate-400 mt-1">
-                  +{incomingOffer.booking_items.length - 1} additional service items included
-                </p>
-              )}
+          {failed && (
+            <div role="alert" className="flex items-start gap-3 rounded-2xl bg-danger/10 border border-danger/30 p-3.5 text-sm text-ink">
+              <AlertCircle className="w-5 h-5 text-danger shrink-0 mt-0.5" aria-hidden />
+              <span>{claimError}</span>
             </div>
+          )}
+        </div>
 
-            {/* Schedule & Location Details */}
-            <div className="grid grid-cols-2 gap-2.5">
-              <div className="p-3 rounded-xl bg-slate-800/60 border border-slate-750 flex items-start gap-2.5">
-                <Calendar className="w-4 h-4 text-orange-400 shrink-0 mt-0.5" />
-                <div>
-                  <p className="text-[11px] text-slate-400 font-sans">Date & Slot</p>
-                  <p className="text-xs font-mono font-semibold text-slate-200">
-                    {incomingOffer.scheduled_date}
-                  </p>
-                  <p className="text-[11px] text-orange-300 font-medium">
-                    {incomingOffer.scheduled_time}
-                  </p>
-                </div>
-              </div>
-
-              <div className="p-3 rounded-xl bg-slate-800/60 border border-slate-750 flex items-start gap-2.5">
-                <MapPin className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-                <div className="overflow-hidden">
-                  <p className="text-[11px] text-slate-400 font-sans">Location</p>
-                  <p className="text-xs font-semibold text-slate-200 truncate">
-                    {address?.city || 'Locality'} {address?.pincode ? `(${address.pincode})` : ''}
-                  </p>
-                  <p className="text-[11px] text-slate-400 truncate">
-                    {address?.landmark || address?.street || 'Full address after accept'}
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* Special Instructions if any */}
-            {incomingOffer.special_instructions && (
-              <div className="p-3 rounded-xl bg-amber-950/30 border border-amber-500/20 text-xs text-amber-200">
-                <span className="font-bold text-amber-300">Note: </span>
-                {incomingOffer.special_instructions}
-              </div>
-            )}
-
-            {/* Error Message if Claim Failed */}
-            {claimError && (
-              <div className="p-3 rounded-xl bg-rose-950/60 border border-rose-500/30 text-xs text-rose-300">
-                {claimError}
-              </div>
-            )}
-          </div>
-
-          {/* Action Buttons */}
-          <div className="p-4 bg-slate-900 border-t border-slate-800 flex gap-3 pb-safe">
-            <button
-              onClick={handleDecline}
-              disabled={isClaiming}
-              className="flex-1 py-3.5 px-4 rounded-2xl bg-slate-800 hover:bg-slate-750 text-slate-300 font-syne font-bold text-sm border border-slate-700 active:scale-98 transition-all flex items-center justify-center gap-2"
-            >
-              <XCircle className="w-4 h-4 text-slate-400" />
-              <span>Decline</span>
-            </button>
-
-            <button
-              onClick={handleAccept}
-              disabled={isClaiming}
-              className="flex-[2] py-3.5 px-4 rounded-2xl bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-slate-950 font-syne font-bold text-sm shadow-lg shadow-orange-500/25 active:scale-98 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
-            >
-              {isClaiming ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin text-slate-950" />
-                  <span>Claiming Job...</span>
-                </>
-              ) : (
-                <>
-                  <CheckCircle2 className="w-4 h-4 text-slate-950" />
-                  <span>Accept Job (₹{estimatedEarnings})</span>
-                </>
-              )}
-            </button>
-          </div>
-        </motion.div>
+        <div className="px-5 pt-3 pb-safe border-t border-line flex gap-3 bg-card">
+          <Button variant="secondary" onClick={() => declineOffer(offer.id)} disabled={isClaiming} className="flex-1" size="lg">
+            {failed ? 'Close' : 'Skip'}
+          </Button>
+          {!failed && (
+            <Button onClick={handleAccept} loading={isClaiming} className="flex-[2]" size="lg">
+              Accept · {formatMoney(payout)}
+            </Button>
+          )}
+        </div>
       </div>
-    </AnimatePresence>
+    </div>
   );
 }

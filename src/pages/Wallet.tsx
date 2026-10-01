@@ -6,6 +6,7 @@ import {
 import { supabase } from '../lib/supabase';
 import { useAuthStore } from '../stores/authStore';
 import { triggerHapticImpact, triggerHapticNotification } from '../lib/haptics';
+import { formatDateTime, formatMoney } from '../lib/format';
 import type { PayoutTransaction } from '../types';
 
 export default function Wallet() {
@@ -54,7 +55,7 @@ export default function Wallet() {
     }
 
     if (amountNum > technicianProfile.wallet_balance) {
-      setErrorMsg('Withdrawal amount exceeds available wallet balance');
+      setErrorMsg('Amount is more than your wallet balance');
       return;
     }
 
@@ -62,26 +63,18 @@ export default function Wallet() {
     setErrorMsg(null);
 
     try {
-      // 1. Deduct wallet balance
-      const newBalance = technicianProfile.wallet_balance - amountNum;
-      await supabase
-        .from('technician_profiles')
-        .update({ wallet_balance: newBalance })
-        .eq('id', user.id);
-
-      // 2. Insert withdrawal payout ledger
-      await supabase
-        .from('technician_payouts')
-        .insert({
-          technician_id: user.id,
-          type: 'withdrawal',
-          amount: amountNum,
-          status: 'completed',
-          notes: `Payout transferred to ${technicianProfile.bank_upi_id || 'UPI/Bank'}`
-        });
+      // Atomic, server-side: checks balance, deducts and writes the ledger in ONE transaction.
+      const { data, error } = await supabase.rpc('request_withdrawal', { p_amount: amountNum });
+      if (error) throw error;
+      const res = data as { success: boolean; message: string };
+      if (!res.success) {
+        setErrorMsg(res.message);
+        return;
+      }
 
       triggerHapticNotification();
-      setSuccessMsg(`₹${amountNum} successfully processed for payout transfer!`);
+      setSuccessMsg(`Withdrawal of ${formatMoney(amountNum)} requested. It shows as pending until the transfer is confirmed.`);
+      window.setTimeout(() => setSuccessMsg(null), 6000);
       setWithdrawModal(false);
       setWithdrawAmount('');
       await fetchProfiles(user.id);
@@ -97,12 +90,7 @@ export default function Wallet() {
 
   return (
     <div className="p-4 space-y-4 max-w-lg mx-auto pb-safe">
-      <div className="pt-safe flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-syne font-bold text-white">Earnings & Wallet</h1>
-          <p className="text-xs text-slate-400">Direct settlements and transaction ledger</p>
-        </div>
-      </div>
+      <h1 className="text-xl font-bold text-ink">Earnings</h1>
 
       {/* Hero Wallet Balance Card */}
       <div className="p-6 rounded-3xl bg-gradient-to-tr from-slate-900 via-slate-900 to-orange-950/60 border border-orange-500/30 shadow-2xl relative overflow-hidden">
@@ -117,13 +105,13 @@ export default function Wallet() {
           </div>
           <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20 flex items-center gap-1">
             <Sparkles className="w-3 h-3" />
-            Auto-Settled
+            Paid per job
           </span>
         </div>
 
         <div className="flex items-baseline gap-1 my-2">
           <span className="text-4xl font-mono font-bold text-white tracking-tight">
-            ₹{balance.toFixed(2)}
+            {formatMoney(balance, { paise: true })}
           </span>
         </div>
 
@@ -190,20 +178,20 @@ export default function Wallet() {
                       <p className="text-xs font-syne font-bold text-white capitalize">
                         {tx.type.replace('_', ' ')}
                       </p>
-                      <p className="text-[10px] text-slate-400 truncate max-w-[180px]">
-                        {tx.notes || new Date(tx.created_at).toLocaleDateString()}
+                      <p className="text-xs text-slate-400 truncate max-w-[180px]">
+                        {tx.notes || formatDateTime(tx.created_at)}
                       </p>
                     </div>
                   </div>
 
                   <div className="text-right">
-                    <p className={`text-sm font-mono font-bold ${
+                    <p className={`text-base font-bold ${
                       isCredit ? 'text-emerald-400' : 'text-slate-200'
                     }`}>
-                      {isCredit ? '+' : '-'}₹{tx.amount.toFixed(2)}
+                      {isCredit ? '+' : '−'}{formatMoney(Number(tx.amount), { paise: true })}
                     </p>
-                    <span className="text-[10px] font-mono text-slate-500">
-                      {new Date(tx.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    <span className="text-xs text-slate-400">
+                      {tx.status === 'pending' ? 'Pending · ' : ''}{formatDateTime(tx.created_at)}
                     </span>
                   </div>
                 </div>
@@ -232,11 +220,12 @@ export default function Wallet() {
 
             <form onSubmit={handleWithdraw} className="space-y-4">
               <div>
-                <label className="block text-[11px] text-slate-400 mb-1">Withdrawal Amount (₹)</label>
+                <label className="block text-sm text-slate-300 mb-1.5">Amount (₹) · minimum ₹100</label>
                 <input
                   type="number"
-                  min="1"
+                  min="100"
                   max={balance}
+                  inputMode="decimal"
                   required
                   value={withdrawAmount}
                   onChange={(e) => setWithdrawAmount(e.target.value)}

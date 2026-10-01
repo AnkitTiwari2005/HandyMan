@@ -15,6 +15,7 @@ export default function Signup() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -58,8 +59,9 @@ export default function Signup() {
         await fetchProfiles(activeUser.id);
         navigate('/kyc', { replace: true });
       } else {
-        // Redirect to login to authenticate with confirmed credentials
-        navigate('/login', { replace: true });
+        // Email confirmation is on: tell the user instead of silently dropping them on Login.
+        setError(null);
+        setNotice('Account created. Check your email and tap the confirmation link, then sign in.');
       }
     } catch (err: any) {
       setError(err.message || 'Registration failed. Please check details.');
@@ -91,6 +93,12 @@ export default function Signup() {
             Get assigned high-value electrician, AC, plumbing, and carpentry jobs.
           </p>
         </div>
+
+        {notice && (
+          <div role="status" className="mb-4 p-3.5 rounded-2xl bg-emerald-950/60 border border-emerald-500/30 text-emerald-200 text-sm">
+            {notice} <Link to="/login" className="font-bold underline">Go to sign in</Link>
+          </div>
+        )}
 
         {error && (
           <div className="mb-4 p-3 rounded-2xl bg-rose-950/60 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
@@ -125,6 +133,8 @@ export default function Signup() {
               <Phone className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
                 type="tel"
+                inputMode="tel"
+                autoComplete="tel"
                 required
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
@@ -142,6 +152,8 @@ export default function Signup() {
               <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
                 type="email"
+                autoComplete="email"
+                inputMode="email"
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -160,10 +172,11 @@ export default function Signup() {
               <input
                 type="password"
                 required
-                minLength={6}
+                minLength={8}
+                autoComplete="new-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="At least 6 characters"
+                placeholder="At least 8 characters"
                 className="w-full bg-slate-900 border border-slate-800 rounded-2xl py-3 pl-10 pr-4 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-orange-500/60 transition-all font-mono"
               />
             </div>

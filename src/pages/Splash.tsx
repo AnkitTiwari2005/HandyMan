@@ -6,19 +6,20 @@ import { useAuthStore } from '../stores/authStore';
 
 export default function Splash() {
   const navigate = useNavigate();
-  const { user } = useAuthStore();
+  const { user, isLoading } = useAuthStore();
 
   useEffect(() => {
+    if (isLoading) return; // wait for the real session check instead of guessing
     const timer = setTimeout(() => {
       if (user) {
         navigate('/', { replace: true });
       } else {
         navigate('/onboarding', { replace: true });
       }
-    }, 2000);
+    }, 900);
 
     return () => clearTimeout(timer);
-  }, [user, navigate]);
+  }, [user, isLoading, navigate]);
 
   return (
     <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-6 relative overflow-hidden">
@@ -46,7 +47,7 @@ export default function Splash() {
 
         <div className="mt-12 flex items-center gap-2">
           <div className="w-2 h-2 rounded-full bg-orange-500 animate-ping" />
-          <span className="text-xs font-mono text-slate-500">Connecting Field Network...</span>
+          <span className="text-xs font-mono text-slate-500">Loading…</span>
         </div>
       </motion.div>
     </div>

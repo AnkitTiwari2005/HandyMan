@@ -1,92 +1,99 @@
 @import "tailwindcss";
 
+/* ------------------------------------------------------------------
+   Design tokens. One brand colour (orange), semantic green/red/amber,
+   neutral surfaces. Pages should prefer these over raw palette classes.
+------------------------------------------------------------------- */
 @theme {
-  --color-primary: #F3732A;
-  --color-primary-hover: #EA580C;
-  --color-primary-light: #FFEDD5;
-  --color-dark-bg: #090D16;
-  --color-dark-card: #111827;
-  --color-dark-surface: #1F2937;
-  --color-dark-border: #374151;
-  --color-status-online: #10B981;
-  --color-status-offline: #6B7280;
-  --color-accent-blue: #3B82F6;
-  
-  --font-syne: "Syne", sans-serif;
-  --font-sans: "DM Sans", sans-serif;
-  --font-mono: "JetBrains Mono", monospace;
+  --color-brand: #F97316;
+  --color-brand-strong: #EA580C;
+  --color-brand-soft: rgb(249 115 22 / 0.14);
+
+  --color-surface: #0B1120;        /* app background */
+  --color-card: #131C2E;           /* cards */
+  --color-card-2: #1B2639;         /* raised / inputs */
+  --color-line: #263249;           /* borders */
+
+  --color-ink: #F1F5F9;            /* primary text */
+  --color-ink-2: #B4C0D2;          /* secondary text (AA on card) */
+  --color-ink-3: #8D9BB0;          /* tertiary text (still >= 4.5:1 on surface) */
+
+  --color-money: #34D399;
+  --color-danger: #F87171;
+  --color-warn: #FBBF24;
+
+  /* Stop-gap for legacy pages: invalid/low-contrast palette steps */
+  --color-slate-750: #243247;
+  --color-slate-500: #8D9BB0;
+  --color-slate-600: #75839A;
+
+  /* One UI family. Syne/mono names kept as aliases so legacy pages
+     stop mixing three typefaces while they are migrated. */
+  --font-sans: "DM Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-syne: "DM Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "DM Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-display: "Syne", "DM Sans", system-ui, sans-serif; /* logo only */
 }
 
 :root {
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --header-h: 56px;
+  --nav-h: 64px;
 }
+
+html { -webkit-text-size-adjust: 100%; }
 
 body {
   margin: 0;
-  padding: 0;
-  background-color: #090D16;
-  color: #F8FAFC;
+  background-color: var(--color-surface);
+  color: var(--color-ink);
   font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;          /* money/times line up */
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  user-select: none;
   touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 
-/* Custom scrollbar */
-::-webkit-scrollbar {
-  width: 4px;
-  height: 4px;
+/* Technicians must be able to copy addresses, phone numbers, booking refs.
+   Only chrome (buttons/nav) is non-selectable. */
+button, nav, [role="tab"] { user-select: none; -webkit-user-select: none; }
+
+/* Legacy pages use 10-11px text. Floor it at 12px until they are migrated. */
+.text-\[10px\], .text-\[11px\] { font-size: 12px !important; line-height: 1.35 !important; }
+
+:focus-visible { outline: 2px solid var(--color-brand); outline-offset: 2px; }
+
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--color-line); border-radius: 9999px; }
+
+@keyframes soft-pulse {
+  0%   { box-shadow: 0 0 0 0 rgb(52 211 153 / 0.55); }
+  70%  { box-shadow: 0 0 0 10px rgb(52 211 153 / 0); }
+  100% { box-shadow: 0 0 0 0 rgb(52 211 153 / 0); }
 }
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: #374151;
-  border-radius: 9999px;
+.online-glow { animation: soft-pulse 2.4s infinite; }
+.radar-glow  { animation: soft-pulse 2s infinite; }
+
+@keyframes shimmer { 100% { transform: translateX(100%); } }
+.skeleton { position: relative; overflow: hidden; background: var(--color-card-2); border-radius: 12px; }
+.skeleton::after {
+  content: ""; position: absolute; inset: 0; transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.06), transparent);
+  animation: shimmer 1.4s infinite;
 }
 
-/* Radar pulse animation */
-@keyframes radar-pulse {
-  0% {
-    transform: scale(0.95);
-    box-shadow: 0 0 0 0 rgba(243, 115, 42, 0.7);
-  }
-  70% {
-    transform: scale(1.05);
-    box-shadow: 0 0 0 25px rgba(243, 115, 42, 0);
-  }
-  100% {
-    transform: scale(0.95);
-    box-shadow: 0 0 0 0 rgba(243, 115, 42, 0);
-  }
-}
+/* Safe-area helpers (FIXED: the old .pb-safe was 88px and was applied to the nav itself) */
+.pt-safe { padding-top: max(0.75rem, var(--safe-top)); }
+.pb-safe { padding-bottom: calc(var(--safe-bottom) + 1rem); }
+.pb-nav  { padding-bottom: calc(var(--nav-h) + var(--safe-bottom) + 1rem); }
 
-.radar-glow {
-  animation: radar-pulse 2s infinite cubic-bezier(0.4, 0, 0.6, 1);
-}
-
-@keyframes green-pulse {
-  0% {
-    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
   }
-  70% {
-    box-shadow: 0 0 0 14px rgba(16, 185, 129, 0);
-  }
-  100% {
-    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
-  }
-}
-
-.online-glow {
-  animation: green-pulse 2.2s infinite;
-}
-
-/* Safe area padding utilities */
-.pt-safe {
-  padding-top: max(1rem, var(--safe-top));
-}
-.pb-safe {
-  padding-bottom: max(5.5rem, calc(var(--safe-bottom) + 5rem));
 }

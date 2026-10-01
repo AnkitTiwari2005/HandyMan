@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { 
   ArrowLeft, Phone, MessageSquare, Navigation, MapPin, Calendar, 
   Clock, ShieldCheck, CheckCircle2, Camera, Upload, AlertCircle, 
-  Loader2, IndianRupee, Sparkles, ExternalLink 
+  Loader2, Copy 
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { supabase } from '../lib/supabase';
@@ -11,13 +11,16 @@ import { useAuthStore } from '../stores/authStore';
 import { useRadarStore } from '../stores/radarStore';
 import { triggerHapticImpact, triggerHapticNotification } from '../lib/haptics';
 import { playSuccessChime } from '../lib/audio';
+import { addressLine, formatDay, formatMoney, payoutFor, whatsappNumber } from '../lib/format';
 import type { Booking } from '../types';
 
 export default function JobDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { user } = useAuthStore();
-  const { setActiveJob } = useRadarStore();
+  const fetchMyJobs = useRadarStore((s) => s.fetchMyJobs);
+  const [confirmComplete, setConfirmComplete] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const [booking, setBooking] = useState<Booking | null>(null);
   const [loading, setLoading] = useState(true);
@@ -43,7 +46,7 @@ export default function JobDetail() {
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'bookings', filter: `id=eq.${id}` },
         () => {
-          fetchBookingData(id);
+          fetchBookingData(id, true);
         }
       )
       .subscribe();
@@ -53,9 +56,9 @@ export default function JobDetail() {
     };
   }, [id]);
 
-  const fetchBookingData = async (bookingId: string) => {
+  const fetchBookingData = async (bookingId: string, silent = false) => {
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const { data, error } = await supabase
         .from('bookings')
         .select(`
@@ -74,7 +77,6 @@ export default function JobDetail() {
 
       if (!error && data) {
         setBooking(data as unknown as Booking);
-        setActiveJob(data as unknown as Booking);
       }
     } catch (err) {
       console.error('Failed to load booking:', err);
@@ -90,16 +92,12 @@ export default function JobDetail() {
     setErrorMsg(null);
 
     try {
-      const { error } = await supabase
-        .from('bookings')
-        .update({
-          status: nextStatus,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', booking.id);
-
+      const { data, error } = await supabase.rpc('start_travel', { p_booking_id: booking.id });
       if (error) throw error;
+      const res = data as { success: boolean; message: string };
+      if (!res.success) throw new Error(res.message);
       setBooking({ ...booking, status: nextStatus });
+      if (user) void fetchMyJobs(user.id);
     } catch (e: any) {
       setErrorMsg(e.message || 'Failed to update status');
     } finally {
@@ -117,7 +115,6 @@ export default function JobDetail() {
     try {
       const { data, error } = await supabase.rpc('verify_start_otp', {
         p_booking_id: booking.id,
-        p_technician_id: user.id,
         p_otp: otpInput.trim()
       });
 
@@ -127,7 +124,9 @@ export default function JobDetail() {
       if (res.success) {
         triggerHapticNotification();
         setOtpModalOpen(false);
+        setOtpInput('');
         setBooking({ ...booking, status: 'in_progress' });
+        void fetchMyJobs(user.id);
       } else {
         setOtpError(res.message);
       }
@@ -155,18 +154,20 @@ export default function JobDetail() {
           .from('job-proofs')
           .upload(filePath, proofAfterFile);
 
-        if (!uploadError) {
-          const { data: publicUrlData } = supabase.storage
-            .from('job-proofs')
-            .getPublicUrl(filePath);
-          afterUrl = publicUrlData.publicUrl;
+        if (uploadError) {
+          setErrorMsg('Photo upload failed. Check your connection and try again, or remove the photo.');
+          setActionLoading(false);
+          return;
         }
+        const { data: publicUrlData } = supabase.storage
+          .from('job-proofs')
+          .getPublicUrl(filePath);
+        afterUrl = publicUrlData.publicUrl;
       }
 
       // Call completion RPC
       const { data, error } = await supabase.rpc('complete_booking_service', {
         p_booking_id: booking.id,
-        p_technician_id: user.id,
         p_proof_after_url: afterUrl,
         p_notes: technicianNotes.trim() || undefined
       });
@@ -174,6 +175,7 @@ export default function JobDetail() {
       if (error) throw error;
 
       const res = data as { success: boolean; message: string; credited_amount: number };
+      if (!res.success) throw new Error(res.message);
       if (res.success) {
         confetti({
           particleCount: 100,
@@ -183,7 +185,8 @@ export default function JobDetail() {
         playSuccessChime();
         triggerHapticNotification();
         setBooking({ ...booking, status: 'completed' });
-        setActiveJob(null);
+        setConfirmComplete(false);
+        void fetchMyJobs(user.id);
       }
     } catch (e: any) {
       setErrorMsg(e.message || 'Failed to complete booking');
@@ -218,8 +221,8 @@ export default function JobDetail() {
 
   const address = booking.address_snapshot;
   const customerPhone = address?.phone || '';
-  const customerAddressText = address?.full_address || `${address?.flat_number || ''}, ${address?.street || ''}, ${address?.city || ''}`;
-  const payout = booking.technician_earnings || Math.round(booking.subtotal * 0.8);
+  const customerAddressText = addressLine(address) || 'Address not available';
+  const payout = payoutFor(booking);
 
   // Turn-by-turn Google Maps URL
   const mapsUrl = address?.latitude && address?.longitude
@@ -227,6 +230,14 @@ export default function JobDetail() {
     : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(customerAddressText)}`;
 
   const isCompleted = booking.status === 'completed';
+
+  const copyAddress = async () => {
+    try {
+      await navigator.clipboard.writeText(customerAddressText);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch { /* clipboard unavailable */ }
+  };
 
   return (
     <div className="p-4 space-y-4 max-w-lg mx-auto pb-safe">
@@ -295,6 +306,10 @@ export default function JobDetail() {
             <p className="text-sm font-semibold text-white leading-snug">
               {customerAddressText}
             </p>
+            <button onClick={copyAddress} className="inline-flex items-center gap-1.5 text-sm font-semibold text-brand min-h-11" aria-label="Copy address">
+              <Copy className="w-4 h-4" aria-hidden /> {copied ? 'Copied' : 'Copy address'}
+            </button>
+            <p className="text-sm text-ink-2">{formatDay(booking.scheduled_date)} · {booking.scheduled_time}</p>
             {address?.landmark && (
               <p className="text-xs text-orange-300">
                 Landmark: {address.landmark}
@@ -332,7 +347,7 @@ export default function JobDetail() {
 
           {customerPhone ? (
             <a
-              href={`https://wa.me/${customerPhone.replace(/[^0-9]/g, '')}?text=Hello!%20I%20am%20your%20Houserve%20technician%20for%20booking%20${booking.booking_ref}.`}
+              href={`https://wa.me/${whatsappNumber(customerPhone)}?text=Hello!%20I%20am%20your%20Houserve%20technician%20for%20booking%20${booking.booking_ref}.`}
               target="_blank"
               rel="noopener noreferrer"
               className="flex flex-col items-center justify-center p-2.5 rounded-2xl bg-teal-500/10 hover:bg-teal-500/20 text-teal-400 border border-teal-500/20 active:scale-95 transition-all text-center"
@@ -351,7 +366,7 @@ export default function JobDetail() {
             Ordered Services
           </span>
           <span className="text-xs font-mono font-bold text-emerald-400">
-            Payout: ₹{payout}
+            You earn {formatMoney(payout)}
           </span>
         </div>
 
@@ -402,7 +417,7 @@ export default function JobDetail() {
               className="w-full py-4 rounded-2xl bg-gradient-to-r from-orange-500 to-amber-500 text-slate-950 font-syne font-bold text-sm shadow-xl shadow-orange-500/25 active:scale-98 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
             >
               {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Navigation className="w-4 h-4" />}
-              <span>Start Travel (Mark "On The Way 🚗")</span>
+              <span>Start trip</span>
             </button>
           )}
 
@@ -415,10 +430,10 @@ export default function JobDetail() {
                 className="w-full py-4 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 text-slate-950 font-syne font-bold text-sm shadow-xl shadow-emerald-500/25 active:scale-98 transition-all flex items-center justify-center gap-2"
               >
                 <ShieldCheck className="w-4 h-4" />
-                <span>Arrived at Doorstep (Verify Customer OTP)</span>
+                <span>I've arrived · Enter customer code</span>
               </button>
               <p className="text-center text-[11px] text-slate-400">
-                Ask customer for the 4-digit code shown on their Houserve app.
+                Ask the customer for the 4-digit code shown in their Houserve app.
               </p>
             </div>
           )}
@@ -463,23 +478,30 @@ export default function JobDetail() {
                 />
               </div>
 
-              <button
-                onClick={handleCompleteJob}
-                disabled={actionLoading}
-                className="w-full py-4 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 text-slate-950 font-syne font-bold text-sm shadow-xl shadow-emerald-500/25 active:scale-98 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
-              >
-                {actionLoading ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin text-slate-950" />
-                    <span>Settling Service & Wallet...</span>
-                  </>
-                ) : (
-                  <>
-                    <CheckCircle2 className="w-4 h-4 text-slate-950" />
-                    <span>Complete Service (Collect ₹{payout})</span>
-                  </>
-                )}
-              </button>
+              {!confirmComplete ? (
+                <button
+                  onClick={() => setConfirmComplete(true)}
+                  disabled={actionLoading}
+                  className="w-full min-h-14 rounded-2xl bg-money text-slate-950 font-bold text-base active:scale-[0.98] transition-all flex items-center justify-center gap-2"
+                >
+                  <CheckCircle2 className="w-5 h-5" aria-hidden />
+                  <span>Complete job</span>
+                </button>
+              ) : (
+                <div className="space-y-3">
+                  <p className="text-sm text-ink-2 text-center">
+                    Mark the job complete? <span className="font-semibold text-money">{formatMoney(payout)}</span> will be added to your wallet. This can't be undone.
+                  </p>
+                  <div className="flex gap-3">
+                    <button onClick={() => setConfirmComplete(false)} disabled={actionLoading}
+                      className="flex-1 min-h-12 rounded-2xl bg-card-2 border border-line text-ink font-semibold">Not yet</button>
+                    <button onClick={handleCompleteJob} disabled={actionLoading}
+                      className="flex-[2] min-h-12 rounded-2xl bg-money text-slate-950 font-bold flex items-center justify-center gap-2 disabled:opacity-50">
+                      {actionLoading ? <><Loader2 className="w-5 h-5 animate-spin" aria-hidden /><span>Completing…</span></> : <span>Yes, complete</span>}
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -492,10 +514,10 @@ export default function JobDetail() {
             <CheckCircle2 className="w-6 h-6" />
           </div>
           <h3 className="font-syne font-bold text-base text-white">
-            Job Successfully Completed!
+            Job completed
           </h3>
           <p className="text-xs text-slate-300">
-            ₹{payout} has been credited to your Partner Wallet balance.
+            {formatMoney(payout)} has been added to your wallet.
           </p>
           <button
             onClick={() => navigate('/wallet')}
@@ -532,6 +554,8 @@ export default function JobDetail() {
               <input
                 type="text"
                 maxLength={4}
+                inputMode="numeric"
+                autoComplete="one-time-code"
                 required
                 autoFocus
                 value={otpInput}
@@ -543,7 +567,7 @@ export default function JobDetail() {
               <div className="flex gap-2.5">
                 <button
                   type="button"
-                  onClick={() => setOtpModalOpen(false)}
+                  onClick={() => { setOtpModalOpen(false); setOtpInput(''); setOtpError(null); }}
                   className="flex-1 py-3 rounded-xl bg-slate-800 text-slate-300 font-syne font-bold text-xs"
                 >
                   Cancel

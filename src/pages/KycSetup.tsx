@@ -87,9 +87,30 @@ export default function KycSetup() {
           .from('kyc-documents')
           .upload(filePath, file, { upsert: true });
 
-        if (!uploadError) {
-          documentUrl = filePath;
+        if (uploadError) {
+          setError('Could not upload your ID photo. Check your connection and try again.');
+          return;
         }
+        documentUrl = filePath;
+      }
+
+      if (!documentUrl) {
+        setError('Please upload a photo of your ID.');
+        return;
+      }
+      const upi = upiId.trim();
+      if (!/^[\w.\-]{2,}@[a-zA-Z]{2,}$/.test(upi)) {
+        setError('Enter a valid UPI ID, for example name@okhdfcbank');
+        return;
+      }
+      const id = idNumber.replace(/[\s-]/g, '');
+      if (idType === 'Aadhaar' && !/^\d{12}$/.test(id)) {
+        setError('Aadhaar number must be 12 digits.');
+        return;
+      }
+      if (idType === 'PAN' && !/^[A-Za-z]{5}\d{4}[A-Za-z]$/.test(id)) {
+        setError('PAN must look like ABCDE1234F.');
+        return;
       }
 
       // 2. Call atomic Security Definer RPC
@@ -99,7 +120,7 @@ export default function KycSetup() {
         p_id_type: idType,
         p_id_number: idNumber,
         p_id_document_url: documentUrl,
-        p_bank_upi_id: upiId,
+        p_bank_upi_id: upiId.trim(),
       });
 
       if (rpcError) {
@@ -112,7 +133,8 @@ export default function KycSetup() {
       }
 
       await fetchProfiles(activeUser.id);
-      navigate('/', { replace: true });
+      // Approval is no longer automatic: new partners wait for verification.
+      navigate('/kyc-pending', { replace: true });
     } catch (err: any) {
       setError(err.message || 'Failed to save KYC configuration');
     } finally {
@@ -128,7 +150,7 @@ export default function KycSetup() {
             <ShieldCheck className="w-5 h-5" />
           </div>
           <span className="text-xs font-mono font-bold text-orange-400 uppercase tracking-widest">
-            Step 2 of 2
+            Last step
           </span>
         </div>
         <h1 className="text-2xl font-syne font-bold text-white">Trades & KYC Verification</h1>
@@ -246,7 +268,7 @@ export default function KycSetup() {
             <label className="flex items-center justify-center gap-2 p-3 rounded-xl border border-dashed border-slate-700 bg-slate-950 hover:border-orange-500/50 cursor-pointer transition-colors text-xs text-slate-400">
               <Upload className="w-4 h-4 text-orange-400" />
               <span>{file ? file.name : 'Choose JPG, PNG or PDF'}</span>
-              <input type="file" accept="image/*,application/pdf" onChange={handleFileUpload} className="hidden" />
+              <input type="file" accept="image/*,application/pdf" capture="environment" onChange={handleFileUpload} className="hidden" />
             </label>
           </div>
         </div>
@@ -284,7 +306,7 @@ export default function KycSetup() {
             </>
           ) : (
             <>
-              <span>Complete Setup & Go Online</span>
+              <span>Submit for verification</span>
               <ArrowRight className="w-4 h-4 text-slate-950" />
             </>
           )}

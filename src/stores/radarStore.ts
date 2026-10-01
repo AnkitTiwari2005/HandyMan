@@ -1,252 +1,262 @@
 import { create } from 'zustand';
 import { supabase } from '../lib/supabase';
+import { useAuthStore } from './authStore';
 import type { Booking } from '../types';
 import { startContinuousRadarAlert, stopContinuousRadarAlert, playSuccessChime } from '../lib/audio';
 import { triggerHapticNotification, triggerHapticImpact } from '../lib/haptics';
 
+export const OFFER_TIMEOUT_SECONDS = 45;
+
+const BOOKING_SELECT = `
+  *,
+  services ( name, category, image_url ),
+  booking_items ( id, quantity, unit_price, total_price, services ( name, image_url ) )
+`;
+
+type Connection = 'offline' | 'connecting' | 'live' | 'reconnecting';
+
 interface RadarState {
+  /** Offers waiting for a decision. First item is the one on screen. */
+  offerQueue: Booking[];
   incomingOffer: Booking | null;
+  /** epoch ms at which the on-screen offer expires (computed, so background throttling can't drift it) */
+  offerDeadline: number | null;
+  /** Job the technician is physically doing right now (on_the_way / in_progress). Only this blocks new offers. */
   activeJob: Booking | null;
+  /** Accepted but not started yet (soonest first). These do NOT block accepting other jobs. */
+  upcomingJobs: Booking[];
   availableJobs: Booking[];
-  isSubscribed: boolean;
+  feedLoading: boolean;
+  feedError: string | null;
+  connection: Connection;
   isClaiming: boolean;
   claimError: string | null;
-  
-  setIncomingOffer: (offer: Booking | null) => void;
+
   setActiveJob: (job: Booking | null) => void;
-  setAvailableJobs: (jobs: Booking[]) => void;
-  
-  startRadarSubscription: (technicianId: string, skills: string[]) => () => void;
-  fetchAvailableJobs: (skills: string[]) => Promise<void>;
-  fetchActiveJob: (technicianId: string) => Promise<void>;
-  
-  claimJob: (bookingId: string, technicianId: string) => Promise<{ success: boolean; message: string }>;
+  startRadarSubscription: (technicianId: string) => () => void;
+  fetchAvailableJobs: () => Promise<void>;
+  fetchMyJobs: (technicianId: string) => Promise<void>;
+  claimJob: (bookingId: string) => Promise<{ success: boolean; message: string }>;
   declineOffer: (bookingId: string) => void;
+  /** Open a job from the feed in the same sheet used for live offers (no alert sound). */
+  presentOffer: (job: Booking) => void;
+  reset: () => void;
+}
+
+const seenOfferIds = new Set<string>(); // ids already offered (or dismissed) this session
+
+const mySkills = () => useAuthStore.getState().technicianProfile?.skills ?? [];
+
+function matchesSkills(b: Booking): boolean {
+  const skills = mySkills();
+  const category = b.services?.category;
+  // Unknown category = cannot verify, so do NOT show it (old code let everything through).
+  return Boolean(category) && skills.includes(category as string);
 }
 
 export const useRadarStore = create<RadarState>((set, get) => ({
+  offerQueue: [],
   incomingOffer: null,
+  offerDeadline: null,
   activeJob: null,
+  upcomingJobs: [],
   availableJobs: [],
-  isSubscribed: false,
+  feedLoading: false,
+  feedError: null,
+  connection: 'offline',
   isClaiming: false,
   claimError: null,
 
-  setIncomingOffer: (offer) => {
-    if (offer) {
-      startContinuousRadarAlert();
-      triggerHapticNotification();
-    } else {
-      stopContinuousRadarAlert();
-    }
-    set({ incomingOffer: offer });
-  },
-
   setActiveJob: (job) => set({ activeJob: job }),
-  setAvailableJobs: (jobs) => set({ availableJobs: jobs }),
 
-  fetchActiveJob: async (technicianId: string) => {
-    try {
-      const activeStatuses = ['accepted', 'on_the_way', 'in_progress'];
-      const { data, error } = await supabase
-        .from('bookings')
-        .select(`
-          *,
-          services ( name, category, image_url ),
-          booking_items (
-            id,
-            quantity,
-            unit_price,
-            total_price,
-            services ( name, image_url )
-          )
-        `)
-        .eq('technician_id', technicianId)
-        .in('status', activeStatuses)
-        .order('updated_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (!error && data) {
-        set({ activeJob: data as unknown as Booking });
-      } else if (!data) {
-        set({ activeJob: null });
-      }
-    } catch (e) {
-      console.error('Failed to fetch active job:', e);
-    }
+  reset: () => {
+    stopContinuousRadarAlert();
+    seenOfferIds.clear();
+    set({
+      offerQueue: [], incomingOffer: null, offerDeadline: null, availableJobs: [],
+      feedError: null, connection: 'offline', claimError: null,
+    });
   },
 
-  fetchAvailableJobs: async (skills: string[]) => {
-    try {
-      const { data, error } = await supabase
-        .from('bookings')
-        .select(`
-          *,
-          services ( name, category, image_url ),
-          booking_items (
-            id,
-            quantity,
-            unit_price,
-            total_price,
-            services ( name, image_url )
-          )
-        `)
-        .is('technician_id', null)
-        .eq('status', 'confirmed')
-        .order('created_at', { ascending: false })
-        .limit(20);
+  fetchMyJobs: async (technicianId) => {
+    const { data, error } = await supabase
+      .from('bookings')
+      .select(BOOKING_SELECT)
+      .eq('technician_id', technicianId)
+      .in('status', ['accepted', 'assigned', 'on_the_way', 'in_progress'])
+      .order('scheduled_date', { ascending: true });
 
-      if (!error && data) {
-        // Filter by technician skills if specified
-        const filtered = data.filter((b: any) => {
-          if (!skills.length) return true;
-          const serviceCategory = b.services?.category;
-          return !serviceCategory || skills.includes(serviceCategory);
-        });
-        set({ availableJobs: filtered as unknown as Booking[] });
-      }
-    } catch (e) {
-      console.error('Failed to fetch available jobs:', e);
-    }
+    if (error || !data) return;
+    const jobs = data as unknown as Booking[];
+    set({
+      activeJob: jobs.find((j) => j.status === 'on_the_way' || j.status === 'in_progress') ?? null,
+      upcomingJobs: jobs.filter((j) => j.status === 'accepted' || j.status === 'assigned'),
+    });
   },
 
-  startRadarSubscription: (technicianId: string, skills: string[]) => {
-    const { fetchAvailableJobs, fetchActiveJob } = get();
+  fetchAvailableJobs: async () => {
+    set({ feedLoading: true });
+    const { data, error } = await supabase
+      .from('bookings')
+      .select(BOOKING_SELECT)
+      .is('technician_id', null)
+      .eq('status', 'confirmed')
+      .order('created_at', { ascending: false })
+      .limit(30);
 
-    // Initial fetch
-    fetchAvailableJobs(skills);
-    fetchActiveJob(technicianId);
+    if (error) {
+      set({ feedLoading: false, feedError: 'Could not load jobs. Pull to retry.' });
+      return;
+    }
+    const jobs = ((data ?? []) as unknown as Booking[]).filter(matchesSkills);
+    set({ availableJobs: jobs, feedLoading: false, feedError: null });
+  },
 
-    // Channel for open bookings (Radar broadcast)
+  startRadarSubscription: (technicianId) => {
+    const { fetchAvailableJobs, fetchMyJobs } = get();
+    set({ connection: 'connecting' });
+    void fetchAvailableJobs();
+    void fetchMyJobs(technicianId);
+
+    const enqueueOffer = (b: Booking) => {
+      if (seenOfferIds.has(b.id) || !matchesSkills(b)) return;
+      seenOfferIds.add(b.id);
+      // Only a job in progress blocks ringing; a future accepted job does not.
+      if (get().activeJob) return;
+
+      const queue = [...get().offerQueue, b];
+      const wasEmpty = get().incomingOffer === null;
+      set({
+        offerQueue: queue,
+        incomingOffer: wasEmpty ? b : get().incomingOffer,
+        offerDeadline: wasEmpty ? Date.now() + OFFER_TIMEOUT_SECONDS * 1000 : get().offerDeadline,
+      });
+      if (wasEmpty) {
+        startContinuousRadarAlert();
+        void triggerHapticNotification();
+      }
+    };
+
+    const loadAndEnqueue = async (id: string) => {
+      const { data } = await supabase.from('bookings').select(BOOKING_SELECT).eq('id', id).maybeSingle();
+      if (data) {
+        const b = data as unknown as Booking;
+        if (b.status === 'confirmed' && !b.technician_id) {
+          enqueueOffer(b);
+          void get().fetchAvailableJobs();
+        }
+      }
+    };
+
+    const dropFromQueues = (id: string) => {
+      const queue = get().offerQueue.filter((o) => o.id !== id);
+      const wasFront = get().incomingOffer?.id === id;
+      set({
+        offerQueue: queue,
+        availableJobs: get().availableJobs.filter((j) => j.id !== id),
+        ...(wasFront
+          ? {
+              incomingOffer: queue[0] ?? null,
+              offerDeadline: queue[0] ? Date.now() + OFFER_TIMEOUT_SECONDS * 1000 : null,
+              claimError: null,
+            }
+          : {}),
+      });
+      if (wasFront && !queue[0]) stopContinuousRadarAlert();
+    };
+
     const channel = supabase
       .channel('handyman-radar')
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'bookings',
-        },
-        async (payload) => {
-          const newBooking = payload.new as any;
-          if (newBooking.status === 'confirmed' && !newBooking.technician_id) {
-            // Fetch complete relation
-            const { data } = await supabase
-              .from('bookings')
-              .select(`
-                *,
-                services ( name, category, image_url ),
-                booking_items ( id, quantity, unit_price, total_price, services ( name, image_url ) )
-              `)
-              .eq('id', newBooking.id)
-              .single();
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'bookings' }, (payload) => {
+        const nb = payload.new as { id: string; status: string; technician_id: string | null };
+        if (nb.status === 'confirmed' && !nb.technician_id) void loadAndEnqueue(nb.id);
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'bookings' }, (payload) => {
+        const u = payload.new as { id: string; status: string; technician_id: string | null };
 
-            if (data) {
-              const fullBooking = data as unknown as Booking;
-              const matchesSkill = !skills.length || (fullBooking.services?.category && skills.includes(fullBooking.services.category));
-              
-              if (matchesSkill) {
-                // If technician doesn't currently have an active job in progress, ring the offer
-                const currentActive = get().activeJob;
-                if (!currentActive) {
-                  get().setIncomingOffer(fullBooking);
-                }
-                // Also update available jobs list
-                fetchAvailableJobs(skills);
-              }
-            }
-          }
+        // pending -> confirmed after payment is the usual flow, so UPDATE must also create offers.
+        if (u.status === 'confirmed' && !u.technician_id) {
+          void loadAndEnqueue(u.id);
+          return;
         }
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'bookings',
-        },
-        (payload) => {
-          const updated = payload.new as any;
-          
-          // If the incoming offer was claimed by someone else or cancelled
-          const currentOffer = get().incomingOffer;
-          if (currentOffer && currentOffer.id === updated.id) {
-            if (updated.technician_id && updated.technician_id !== technicianId) {
-              // Claimed by another partner
-              get().setIncomingOffer(null);
-            } else if (updated.status === 'cancelled') {
-              get().setIncomingOffer(null);
-            }
-          }
-
-          // If active job was updated
-          const currentActive = get().activeJob;
-          if (currentActive && currentActive.id === updated.id) {
-            if (updated.status === 'completed' || updated.status === 'cancelled') {
-              set({ activeJob: null });
-            } else {
-              fetchActiveJob(technicianId);
-            }
-          }
-
-          fetchAvailableJobs(skills);
+        // Taken by someone else / cancelled: remove locally (no full refetch for every booking change).
+        if ((u.technician_id && u.technician_id !== technicianId) || u.status === 'cancelled') {
+          dropFromQueues(u.id);
         }
-      )
+        // Changes to my own jobs.
+        if (u.technician_id === technicianId) void get().fetchMyJobs(technicianId);
+      })
       .subscribe((status) => {
-        set({ isSubscribed: status === 'SUBSCRIBED' });
+        if (status === 'SUBSCRIBED') {
+          set({ connection: 'live' });
+          void get().fetchAvailableJobs(); // catch up on anything missed while disconnected
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          set({ connection: 'reconnecting' });
+        }
       });
 
     return () => {
-      stopContinuousRadarAlert();
       supabase.removeChannel(channel);
-      set({ isSubscribed: false });
+      get().reset();
     };
   },
 
-  claimJob: async (bookingId: string, technicianId: string) => {
+  claimJob: async (bookingId) => {
     set({ isClaiming: true, claimError: null });
     stopContinuousRadarAlert();
-    triggerHapticImpact();
+    void triggerHapticImpact();
 
     try {
-      // Call atomic stored procedure
-      const { data, error } = await supabase.rpc('claim_booking', {
-        p_booking_id: bookingId,
-        p_technician_id: technicianId
-      });
+      const { data, error } = await supabase.rpc('claim_booking', { p_booking_id: bookingId });
+      if (error) throw error;
 
-      if (error) {
-        throw error;
-      }
-
-      const result = data as { success: boolean; message: string; payout?: number };
-
+      const result = data as { success: boolean; message: string };
       if (result.success) {
         playSuccessChime();
-        triggerHapticNotification();
-        set({ incomingOffer: null, isClaiming: false });
-        
-        // Fetch active job state
-        await get().fetchActiveJob(technicianId);
-        return { success: true, message: result.message };
-      } else {
-        set({ claimError: result.message, isClaiming: false, incomingOffer: null });
-        return { success: false, message: result.message };
+        void triggerHapticNotification();
+        const technicianId = useAuthStore.getState().user?.id;
+        get().declineOffer(bookingId); // removes it from the queue; no alert restart needed
+        set({ isClaiming: false, claimError: null });
+        if (technicianId) await get().fetchMyJobs(technicianId);
+        return result;
       }
-    } catch (err: any) {
-      const msg = err.message || 'Failed to claim booking. Please try again.';
+      // KEEP the offer on screen so the technician actually sees why it failed.
+      set({ claimError: result.message, isClaiming: false });
+      return result;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Could not accept the job. Please try again.';
       set({ claimError: msg, isClaiming: false });
       return { success: false, message: msg };
     }
   },
 
-  declineOffer: (bookingId: string) => {
-    stopContinuousRadarAlert();
-    triggerHapticImpact();
-    const current = get().incomingOffer;
-    if (current && current.id === bookingId) {
-      set({ incomingOffer: null });
+  presentOffer: (job) => {
+    if (get().incomingOffer) return;
+    set({
+      incomingOffer: job,
+      offerQueue: [job, ...get().offerQueue.filter((o) => o.id !== job.id)],
+      offerDeadline: Date.now() + OFFER_TIMEOUT_SECONDS * 1000,
+      claimError: null,
+    });
+  },
+
+  declineOffer: (bookingId) => {
+    void triggerHapticImpact();
+    const queue = get().offerQueue.filter((o) => o.id !== bookingId);
+    const wasFront = get().incomingOffer?.id === bookingId;
+    set({
+      offerQueue: queue,
+      ...(wasFront
+        ? {
+            incomingOffer: queue[0] ?? null,
+            offerDeadline: queue[0] ? Date.now() + OFFER_TIMEOUT_SECONDS * 1000 : null,
+            claimError: null,
+          }
+        : {}),
+    });
+    if (wasFront) {
+      if (queue[0]) startContinuousRadarAlert();
+      else stopContinuousRadarAlert();
     }
-  }
+  },
 }));

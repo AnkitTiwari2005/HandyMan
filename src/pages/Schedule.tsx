@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { CalendarCheck, Clock, MapPin, CheckCircle2, ChevronRight, Loader2, Calendar } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuthStore } from '../stores/authStore';
+import { formatDay, formatMoney, payoutFor } from '../lib/format';
 import type { Booking } from '../types';
 
 export default function Schedule() {
@@ -28,7 +29,7 @@ export default function Schedule() {
           booking_items ( id, quantity, unit_price, total_price, services ( name ) )
         `)
         .eq('technician_id', user?.id)
-        .order('scheduled_date', { ascending: false });
+        .order('scheduled_date', { ascending: true });
 
       if (!error && data) {
         setBookings(data as unknown as Booking[]);
@@ -41,22 +42,17 @@ export default function Schedule() {
   };
 
   const activeStatuses = ['assigned', 'accepted', 'on_the_way', 'in_progress'];
-  const filteredBookings = bookings.filter((b) => 
-    tab === 'active' 
-      ? activeStatuses.includes(b.status)
-      : b.status === 'completed'
-  );
+  const filteredBookings = bookings
+    .filter((b) => (tab === 'active' ? activeStatuses.includes(b.status) : b.status === 'completed'))
+    // upcoming: soonest first; history: newest first
+    .sort((a, b) => (tab === 'active' ? 1 : -1) * a.scheduled_date.localeCompare(b.scheduled_date));
 
   return (
     <div className="p-4 space-y-4 max-w-lg mx-auto pb-safe">
-      <div className="pt-safe flex items-center justify-between">
+      <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-syne font-bold text-white">My Bookings</h1>
-          <p className="text-xs text-slate-400">Assigned customer appointments</p>
+          <h1 className="text-xl font-bold text-ink">My jobs</h1>
         </div>
-        <span className="text-xs font-mono text-orange-400 bg-orange-500/10 px-2.5 py-1 rounded-lg border border-orange-500/20">
-          {bookings.length} Total
-        </span>
       </div>
 
       {/* Tabs */}
@@ -69,7 +65,7 @@ export default function Schedule() {
               : 'text-slate-400 hover:text-white'
           }`}
         >
-          Active Orders ({bookings.filter(b => activeStatuses.includes(b.status)).length})
+          Upcoming ({bookings.filter(b => activeStatuses.includes(b.status)).length})
         </button>
         <button
           onClick={() => setTab('completed')}
@@ -92,7 +88,7 @@ export default function Schedule() {
       ) : filteredBookings.length === 0 ? (
         <div className="p-12 text-center rounded-3xl bg-slate-900/50 border border-slate-800">
           <CalendarCheck className="w-12 h-12 text-slate-600 mx-auto mb-3" />
-          <p className="font-syne font-bold text-sm text-slate-300">No {tab} orders found</p>
+          <p className="font-syne font-bold text-sm text-slate-300">{tab === 'active' ? 'No upcoming jobs' : 'No completed jobs yet'}</p>
           <p className="text-xs text-slate-500 mt-1">
             {tab === 'active' ? 'New accepted jobs will appear here.' : 'Completed bookings will be archived here.'}
           </p>
@@ -100,7 +96,7 @@ export default function Schedule() {
       ) : (
         <div className="space-y-3">
           {filteredBookings.map((b) => {
-            const payout = b.technician_earnings || Math.round(b.subtotal * 0.8);
+            const payout = payoutFor(b);
             const address = b.address_snapshot;
 
             return (
@@ -119,7 +115,7 @@ export default function Schedule() {
                     </h3>
                   </div>
                   <div className="text-right">
-                    <p className="text-base font-mono font-bold text-emerald-400">₹{payout}</p>
+                    <p className="text-base font-mono font-bold text-emerald-400">{formatMoney(payout)}</p>
                     <span className="text-[10px] font-syne uppercase text-slate-400">
                       {b.status.replace('_', ' ')}
                     </span>
@@ -130,7 +126,7 @@ export default function Schedule() {
                   <div className="flex items-center gap-3">
                     <span className="flex items-center gap-1">
                       <Calendar className="w-3 h-3 text-slate-500" />
-                      {b.scheduled_date}
+                      {formatDay(b.scheduled_date)}
                     </span>
                     <span className="flex items-center gap-1 text-slate-300">
                       <Clock className="w-3 h-3" />

@@ -1,171 +1,107 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import type { User } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import type { UserProfile, TechnicianProfile } from '../types';
 
 interface AuthState {
-  user: any | null;
+  user: User | null;
   profile: UserProfile | null;
   technicianProfile: TechnicianProfile | null;
+  /** True only until the FIRST session + profile load finishes. Later refreshes are silent. */
   isLoading: boolean;
-  setUser: (user: any | null) => void;
-  setProfile: (profile: UserProfile | null) => void;
-  setTechnicianProfile: (techProfile: TechnicianProfile | null) => void;
+  profileError: string | null;
+  /** id of the user whose profiles have been loaded at least once (prevents a wrong /kyc redirect while loading) */
+  profileLoadedFor: string | null;
+  setUser: (user: User | null) => void;
   setLoading: (loading: boolean) => void;
   signOut: () => Promise<void>;
+  /** Reloads profiles without ever unmounting the app after the first load. */
   fetchProfiles: (userId: string) => Promise<void>;
-  toggleOnlineStatus: (status?: boolean) => Promise<boolean>;
+  toggleOnlineStatus: (status?: boolean) => Promise<{ ok: boolean; message?: string }>;
   updateLocation: (lat: number, lng: number) => Promise<void>;
 }
 
-export const useAuthStore = create<AuthState>()(
-  persist(
-    (set, get) => ({
-      user: null,
-      profile: null,
-      technicianProfile: null,
-      isLoading: true,
+// NOTE: deliberately NOT persisted. Wallet, ID number and UPI must not sit in
+// localStorage. Supabase already persists the session itself.
+export const useAuthStore = create<AuthState>()((set, get) => ({
+  user: null,
+  profile: null,
+  technicianProfile: null,
+  isLoading: true,
+  profileError: null,
+  profileLoadedFor: null,
 
-      setUser: (user) => set({ user }),
-      setProfile: (profile) => set({ profile }),
-      setTechnicianProfile: (technicianProfile) => set({ technicianProfile }),
-      setLoading: (isLoading) => set({ isLoading }),
+  setUser: (user) => set({ user }),
+  setLoading: (isLoading) => set({ isLoading }),
 
-      signOut: async () => {
-        const { technicianProfile } = get();
-        // Automatically switch offline on logout if online
-        if (technicianProfile?.is_online) {
-          try {
-            await supabase
-              .from('technician_profiles')
-              .update({ is_online: false, updated_at: new Date().toISOString() })
-              .eq('id', technicianProfile.id);
-          } catch (e) {
-            console.error('Error toggling offline on signout:', e);
-          }
-        }
-        await supabase.auth.signOut();
-        set({ user: null, profile: null, technicianProfile: null });
-      },
-
-      fetchProfiles: async (userId: string) => {
-        try {
-          set({ isLoading: true });
-
-          // 1. Fetch main base profile
-          const { data: baseProfile, error: baseErr } = await supabase
-            .from('profiles')
-            .select('*')
-            .eq('id', userId)
-            .single();
-
-          if (!baseErr && baseProfile) {
-            set({ profile: baseProfile });
-          }
-
-          // 2. Fetch or initialize technician profile companion
-          const { data: techProfile, error: techErr } = await supabase
-            .from('technician_profiles')
-            .select('*')
-            .eq('id', userId)
-            .maybeSingle();
-
-          if (!techErr && techProfile) {
-            set({ technicianProfile: techProfile });
-          } else if (!techProfile) {
-            // Create default companion record if missing
-            const newTech = {
-              id: userId,
-              skills: ['Electrical'],
-              experience_years: 1,
-              verification_status: 'pending',
-              is_online: false,
-              wallet_balance: 0.00,
-              rating: 5.00,
-              total_completed_jobs: 0,
-            };
-
-            const { data: createdTech } = await supabase
-              .from('technician_profiles')
-              .insert(newTech)
-              .select()
-              .single();
-
-            if (createdTech) {
-              set({ technicianProfile: createdTech as TechnicianProfile });
-            }
-          }
-        } catch (error) {
-          console.error('Error in fetchProfiles:', error);
-        } finally {
-          set({ isLoading: false });
-        }
-      },
-
-      toggleOnlineStatus: async (forceStatus?: boolean) => {
-        const { user, technicianProfile } = get();
-        if (!user || !technicianProfile) return false;
-
-        const nextStatus = forceStatus !== undefined ? forceStatus : !technicianProfile.is_online;
-
-        try {
-          const { error } = await supabase
-            .from('technician_profiles')
-            .update({
-              is_online: nextStatus,
-              updated_at: new Date().toISOString()
-            })
-            .eq('id', user.id);
-
-          if (!error) {
-            set({
-              technicianProfile: {
-                ...technicianProfile,
-                is_online: nextStatus
-              }
-            });
-            return nextStatus;
-          }
-          return technicianProfile.is_online;
-        } catch (err) {
-          console.error('Failed to toggle online status:', err);
-          return technicianProfile.is_online;
-        }
-      },
-
-      updateLocation: async (lat: number, lng: number) => {
-        const { user, technicianProfile } = get();
-        if (!user || !technicianProfile) return;
-
-        try {
-          await supabase
-            .from('technician_profiles')
-            .update({
-              current_latitude: lat,
-              current_longitude: lng,
-              updated_at: new Date().toISOString()
-            })
-            .eq('id', user.id);
-
-          set({
-            technicianProfile: {
-              ...technicianProfile,
-              current_latitude: lat,
-              current_longitude: lng
-            }
-          });
-        } catch (e) {
-          console.warn('Location update failed:', e);
-        }
+  signOut: async () => {
+    const { technicianProfile } = get();
+    if (technicianProfile?.is_online) {
+      try {
+        await supabase
+          .from('technician_profiles')
+          .update({ is_online: false, updated_at: new Date().toISOString() })
+          .eq('id', technicianProfile.id);
+      } catch (e) {
+        console.error('Error going offline on sign out:', e);
       }
-    }),
-    {
-      name: 'handyman-auth-storage',
-      partialize: (state) => ({
-        user: state.user,
-        profile: state.profile,
-        technicianProfile: state.technicianProfile
-      })
     }
-  )
-);
+    await supabase.auth.signOut();
+    set({ user: null, profile: null, technicianProfile: null, profileLoadedFor: null, isLoading: false });
+  },
+
+  fetchProfiles: async (userId: string) => {
+    try {
+      const [baseRes, techRes] = await Promise.all([
+        supabase.from('profiles').select('*').eq('id', userId).maybeSingle(),
+        supabase.from('technician_profiles').select('*').eq('id', userId).maybeSingle(),
+      ]);
+
+      if (baseRes.error || techRes.error) {
+        set({ profileError: 'Could not load your profile. Check your connection and try again.' });
+      } else {
+        set({
+          profile: (baseRes.data as UserProfile | null) ?? null,
+          // No auto-created default profile any more: a missing row means
+          // "has not completed trade + KYC setup yet" and routes to /kyc.
+          technicianProfile: (techRes.data as TechnicianProfile | null) ?? null,
+          profileError: null,
+        });
+      }
+    } catch (error) {
+      console.error('Error in fetchProfiles:', error);
+      set({ profileError: 'Could not load your profile. Check your connection and try again.' });
+    } finally {
+      set({ profileLoadedFor: userId, isLoading: false });
+    }
+  },
+
+  toggleOnlineStatus: async (forceStatus?: boolean) => {
+    const { user, technicianProfile } = get();
+    if (!user || !technicianProfile) return { ok: false, message: 'Profile not loaded.' };
+    if (technicianProfile.verification_status !== 'approved') {
+      return { ok: false, message: 'You can go online once your profile is verified.' };
+    }
+
+    const nextStatus = forceStatus ?? !technicianProfile.is_online;
+    const { error } = await supabase
+      .from('technician_profiles')
+      .update({ is_online: nextStatus, updated_at: new Date().toISOString() })
+      .eq('id', user.id);
+
+    if (error) return { ok: false, message: 'Could not change status. Please try again.' };
+    set({ technicianProfile: { ...technicianProfile, is_online: nextStatus } });
+    return { ok: true };
+  },
+
+  updateLocation: async (lat: number, lng: number) => {
+    const { user, technicianProfile } = get();
+    if (!user || !technicianProfile) return;
+    const { error } = await supabase
+      .from('technician_profiles')
+      .update({ current_latitude: lat, current_longitude: lng, updated_at: new Date().toISOString() })
+      .eq('id', user.id);
+    if (error) return console.warn('Location update failed:', error.message);
+    set({ technicianProfile: { ...technicianProfile, current_latitude: lat, current_longitude: lng } });
+  },
+}));

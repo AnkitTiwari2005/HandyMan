@@ -71,7 +71,7 @@ export default function Profile() {
 
   return (
     <div className="p-4 space-y-4 max-w-lg mx-auto pb-safe">
-      <div className="pt-safe flex items-center justify-between">
+      <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-syne font-bold text-white">Partner Profile</h1>
           <p className="text-xs text-slate-400">Credentials, active trades, and radius</p>
@@ -88,9 +88,13 @@ export default function Profile() {
             <h2 className="font-syne font-bold text-lg text-white truncate">
               {profile?.full_name || 'Service Partner'}
             </h2>
-            <span className="text-[10px] font-mono font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1.5 py-0.5 rounded">
-              Verified
-            </span>
+            {technicianProfile?.verification_status === 'approved' ? (
+              <span className="text-xs font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded">Verified</span>
+            ) : (
+              <span className="text-xs font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20 px-2 py-0.5 rounded capitalize">
+                {technicianProfile?.verification_status ?? 'Pending'}
+              </span>
+            )}
           </div>
           <p className="text-xs text-slate-400 flex items-center gap-1.5 mt-0.5 font-mono">
             <Mail className="w-3.5 h-3.5 text-slate-500" />

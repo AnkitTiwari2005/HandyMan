@@ -1,17 +1,19 @@
 import { useState, useEffect } from 'react';
-import { Bell, Check, Clock, Loader2, Sparkles, AlertCircle } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Bell, Check, Loader2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuthStore } from '../stores/authStore';
 import type { NotificationItem } from '../types';
 
 export default function Notifications() {
   const { user } = useAuthStore();
+  const navigate = useNavigate();
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!user) return;
-    fetchNotifications();
+    fetchNotifications(false);
 
     const channel = supabase
       .channel('partner-notifications')
@@ -29,9 +31,9 @@ export default function Notifications() {
     };
   }, [user]);
 
-  const fetchNotifications = async () => {
+  const fetchNotifications = async (silent = true) => {
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const { data, error } = await supabase
         .from('notifications')
         .select('*')
@@ -46,6 +48,14 @@ export default function Notifications() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const openNotification = async (n: NotificationItem) => {
+    if (!n.is_read) {
+      setNotifications((prev) => prev.map((x) => (x.id === n.id ? { ...x, is_read: true } : x)));
+      await supabase.from('notifications').update({ is_read: true }).eq('id', n.id);
+    }
+    if (n.booking_id) navigate(`/job/${n.booking_id}`);
   };
 
   const markAllAsRead = async () => {
@@ -64,7 +74,7 @@ export default function Notifications() {
 
   return (
     <div className="p-4 space-y-4 max-w-lg mx-auto pb-safe">
-      <div className="pt-safe flex items-center justify-between">
+      <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-syne font-bold text-white">Notifications</h1>
           <p className="text-xs text-slate-400">Order updates & payout alerts</p>
@@ -94,9 +104,10 @@ export default function Notifications() {
       ) : (
         <div className="space-y-2.5">
           {notifications.map((n) => (
-            <div
+            <button
               key={n.id}
-              className={`p-4 rounded-2xl border transition-all ${
+              onClick={() => openNotification(n)}
+              className={`w-full text-left p-4 rounded-2xl border transition-all ${
                 n.is_read
                   ? 'bg-slate-900/60 border-slate-800/80 text-slate-400'
                   : 'bg-slate-900 border-orange-500/30 text-slate-200 shadow-md'
@@ -108,11 +119,11 @@ export default function Notifications() {
                   <h4 className="font-syne font-bold text-sm text-white">{n.title}</h4>
                 </div>
                 <span className="text-[10px] font-mono text-slate-500">
-                  {new Date(n.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  {new Date(n.created_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}
                 </span>
               </div>
-              <p className="text-xs text-slate-400 mt-1 leading-relaxed">{n.body}</p>
-            </div>
+              <p className="text-sm text-slate-300 mt-1 leading-relaxed">{n.body}</p>
+            </button>
           ))}
         </div>
       )}

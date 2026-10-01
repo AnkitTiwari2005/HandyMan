@@ -1,58 +1,58 @@
-import { ShieldAlert, ArrowRight } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useState } from 'react';
+import { Navigate, useNavigate } from 'react-router-dom';
+import { ShieldCheck, ShieldX, RefreshCw, Pencil } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
-import { supabase } from '../lib/supabase';
+import { Button } from '../components/ui';
 
+/** Real verification status. There is NO self-approve button any more:
+ *  approval happens server-side (admin_set_verification). */
 export default function KycPending() {
   const navigate = useNavigate();
-  const { user, fetchProfiles } = useAuthStore();
+  const { user, technicianProfile, fetchProfiles, signOut } = useAuthStore();
+  const [checking, setChecking] = useState(false);
 
-  const handleInstantApprove = async () => {
+  if (!user) return <Navigate to="/login" replace />;
+
+  const status = technicianProfile?.verification_status ?? 'pending';
+  const rejected = status === 'rejected';
+
+  const refresh = async () => {
     if (!user) return;
-    try {
-      await supabase
-        .from('technician_profiles')
-        .update({ verification_status: 'approved', is_online: true })
-        .eq('id', user.id);
-      await fetchProfiles(user.id);
+    setChecking(true);
+    await fetchProfiles(user.id);
+    setChecking(false);
+    if (useAuthStore.getState().technicianProfile?.verification_status === 'approved') {
       navigate('/', { replace: true });
-    } catch (e) {
-      console.error(e);
     }
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-between p-6 max-w-lg mx-auto">
-      <div className="pt-safe flex items-center justify-between">
-        <span className="font-syne font-bold text-lg text-white">HandyMan</span>
-      </div>
+    <div className="min-h-dvh bg-surface text-ink flex flex-col justify-between p-6 max-w-lg mx-auto">
+      <div className="pt-safe"><span className="font-bold text-lg">HandyMan</span></div>
 
-      <div className="my-auto py-8 text-center flex flex-col items-center">
-        <div className="w-20 h-20 rounded-3xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center mb-6">
-          <ShieldAlert className="w-10 h-10" />
+      <div className="py-8 text-center flex flex-col items-center">
+        <div className={`w-20 h-20 rounded-3xl flex items-center justify-center mb-6 ${rejected ? 'bg-danger/10 text-danger' : 'bg-warn/10 text-warn'}`}>
+          {rejected ? <ShieldX className="w-10 h-10" aria-hidden /> : <ShieldCheck className="w-10 h-10" aria-hidden />}
         </div>
-
-        <h2 className="text-2xl font-syne font-bold text-white mb-2">
-          Profile Verification
-        </h2>
-        <p className="text-xs text-slate-400 max-w-xs mb-8">
-          Your credentials and identity documents are safely registered in our partner database.
+        <h1 className="text-2xl font-bold mb-2">{rejected ? 'Verification needs attention' : 'Verification in progress'}</h1>
+        <p className="text-base text-ink-2 max-w-sm mb-2">
+          {rejected
+            ? (technicianProfile?.rejection_reason || 'We could not verify your documents. Please update them and submit again.')
+            : 'Our team is checking your documents. This usually takes up to 24 hours. You can start taking jobs as soon as you are approved.'}
         </p>
-
-        <button
-          onClick={handleInstantApprove}
-          className="w-full py-4 rounded-2xl bg-gradient-to-r from-orange-500 to-amber-500 text-slate-950 font-syne font-bold text-sm shadow-xl shadow-orange-500/25 active:scale-98 transition-all flex items-center justify-center gap-2"
-        >
-          <span>Activate Partner & Go Online</span>
-          <ArrowRight className="w-4 h-4 text-slate-950" />
-        </button>
+        <div className="w-full mt-8 space-y-3">
+          {rejected ? (
+            <Button full size="lg" icon={<Pencil className="w-5 h-5" aria-hidden />} onClick={() => navigate('/kyc')}>Update documents</Button>
+          ) : (
+            <Button full size="lg" variant="secondary" loading={checking} icon={<RefreshCw className="w-5 h-5" aria-hidden />} onClick={refresh}>
+              Check status
+            </Button>
+          )}
+          <Button full variant="ghost" onClick={async () => { await signOut(); navigate('/login', { replace: true }); }}>Sign out</Button>
+        </div>
       </div>
 
-      <div className="text-center pb-safe">
-        <p className="text-xs text-slate-500">
-          Need help? Contact partner-support@houserve.com
-        </p>
-      </div>
+      <p className="text-center text-sm text-ink-3 pb-safe">Need help? partner-support@houserve.com</p>
     </div>
   );
 }

@@ -24,32 +24,22 @@ export default function App() {
   const { setUser, fetchProfiles, setLoading } = useAuthStore();
 
   useEffect(() => {
-    // Check initial auth session
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    // One listener handles everything (INITIAL_SESSION fires on startup), so we
+    // no longer call getSession() AND fetch again from here and from Login.
+    // Never await other Supabase calls inside this callback (deadlock risk):
+    // defer them with setTimeout.
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (session?.user) {
         setUser(session.user);
-        fetchProfiles(session.user.id);
+        if (event === 'TOKEN_REFRESHED') return; // nothing to reload
+        setTimeout(() => { void fetchProfiles(session.user.id); }, 0);
       } else {
+        setUser(null);
         setLoading(false);
       }
     });
 
-    // Listen for auth state changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (_event, session) => {
-        if (session?.user) {
-          setUser(session.user);
-          await fetchProfiles(session.user.id);
-        } else {
-          setUser(null);
-          setLoading(false);
-        }
-      }
-    );
-
-    return () => {
-      subscription.unsubscribe();
-    };
+    return () => subscription.unsubscribe();
   }, [setUser, fetchProfiles, setLoading]);
 
   return (
