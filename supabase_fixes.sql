@@ -165,13 +165,13 @@ BEGIN
   RETURN jsonb_build_object('success', true, 'message', 'Job accepted.', 'payout', v_payout);
 END $$;
 
--- accepted -> on_the_way (the only transition that needs no OTP)
+-- accepted/assigned -> on_the_way (the only transition that needs no OTP)
 CREATE OR REPLACE FUNCTION public.start_travel(p_booking_id UUID)
 RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 DECLARE v_rows INTEGER;
 BEGIN
   UPDATE bookings SET status = 'on_the_way', updated_at = NOW()
-   WHERE id = p_booking_id AND technician_id = auth.uid() AND status = 'accepted';
+   WHERE id = p_booking_id AND technician_id = auth.uid() AND status IN ('accepted', 'assigned');
   GET DIAGNOSTICS v_rows = ROW_COUNT;
   IF v_rows = 0 THEN
     RETURN jsonb_build_object('success', false, 'message', 'This job cannot be started right now.');

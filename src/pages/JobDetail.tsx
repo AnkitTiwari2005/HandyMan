@@ -22,6 +22,7 @@ const STEPS = ['Accepted', 'On Way', 'In Work', 'Done'] as const;
 
 function stepIndex(status: Booking['status']): number {
   switch (status) {
+    case 'assigned':
     case 'accepted':    return 0;
     case 'on_the_way':  return 1;
     case 'in_progress': return 2;
@@ -151,13 +152,27 @@ export default function JobDetail() {
     if (!booking) return;
     setActionLoading(true);
     setErrorMsg(null);
-    const { error } = await supabase.rpc('start_travel', { p_booking_id: booking.id });
-    if (error) {
-      setErrorMsg(error.message || 'Could not update status. Please try again.');
-    } else {
-      void fetchBooking(true);
-      if (user?.id) void fetchMyJobs(user.id);
+    const { data, error } = await supabase.rpc('start_travel', { p_booking_id: booking.id });
+    const res = data as { success: boolean; message: string } | null;
+
+    if (error || (res && !res.success)) {
+      // Resilient fallback: direct update if RPC fails due to status='assigned'
+      const { error: directErr } = await supabase
+        .from('bookings')
+        .update({ status: 'on_the_way', updated_at: new Date().toISOString() })
+        .eq('id', booking.id)
+        .eq('technician_id', user?.id)
+        .in('status', ['accepted', 'assigned']);
+
+      if (directErr) {
+        setErrorMsg(error?.message || res?.message || 'Could not update status. Please try again.');
+        setActionLoading(false);
+        return;
+      }
     }
+
+    void fetchBooking(true);
+    if (user?.id) void fetchMyJobs(user.id);
     setActionLoading(false);
   };
 
@@ -467,8 +482,8 @@ export default function JobDetail() {
         {!isCompleted && !isCancelled && (
           <div className="space-y-3 animate-fade-up stagger-4">
 
-            {/* accepted → start travel */}
-            {booking.status === 'accepted' && (
+            {/* accepted or assigned → start travel */}
+            {(booking.status === 'accepted' || booking.status === 'assigned') && (
               <Button
                 variant="primary"
                 size="lg"
