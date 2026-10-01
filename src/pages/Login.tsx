@@ -9,7 +9,7 @@ import { ImpactStyle } from '@capacitor/haptics';
 
 export default function Login() {
   const navigate = useNavigate();
-  const { fetchProfiles } = useAuthStore();
+  const { setUser, fetchProfiles } = useAuthStore();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -34,13 +34,24 @@ export default function Login() {
         return;
       }
 
-      if (data.session) {
-        await fetchProfiles(data.session.user.id);
+      if (data.user) {
+        setUser(data.user);
+        await fetchProfiles(data.user.id);
         void triggerHapticImpact(ImpactStyle.Medium);
-        navigate('/');
+
+        // Smart redirect to avoid intermediate hops or blank screen loops
+        const tech = useAuthStore.getState().technicianProfile;
+        if (!tech) {
+          navigate('/kyc', { replace: true });
+        } else if (tech.verification_status !== 'approved') {
+          navigate('/kyc-pending', { replace: true });
+        } else {
+          navigate('/', { replace: true });
+        }
       }
-    } catch (err) {
-      setError('Something went wrong. Please try again.');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Invalid partner credentials. Please try again.';
+      setError(msg);
       void triggerHapticImpact(ImpactStyle.Heavy);
     } finally {
       setLoading(false);
@@ -58,68 +69,71 @@ export default function Login() {
         <div className="absolute inset-0 opacity-10 bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzMDAiIGhlaWdodD0iMzAwIj48ZmlsdGVyIGlkPSJub2lzZSI+PGZlVHVyYnVsZW5jZSB0eXBlPSJmcmFjdGFsTm9pc2UiIGJhc2VGcmVxdWVuY3k9IjAuNjUiIG51bU9jdGF2ZXM9IjMiIHN0aXRjaFRpbGVzPSJzdGl0Y2giLz48L2ZpbHRlcj48cmVjdCB3aWR0aD0iMzAwIiBoZWlnaHQ9IjMwMCIgZmlsdGVyPSJ1cmwoI25vaXNlKSIgb3BhY2l0eT0iMSIvPjwvc3ZnPg==')] pointer-events-none" />
 
         {/* Logo badge */}
-        <div className="w-16 h-16 rounded-2xl bg-white/20 backdrop-blur-sm flex items-center justify-center mb-4 shadow-lg">
-          <Wrench className="w-9 h-9 text-white" strokeWidth={2.5} />
+        <div className="w-16 h-16 rounded-2xl bg-white shadow-xl flex items-center justify-center mb-3">
+          <Wrench className="w-8 h-8 text-brand" />
         </div>
 
-        <h1 className="font-display text-3xl font-bold text-white">HandyMan</h1>
-        <p className="text-white/80 text-sm mt-1">Partner Portal</p>
+        <h1 className="font-display text-3xl font-bold text-white tracking-tight">HandyMan</h1>
+        <p className="text-white/80 text-sm font-medium mt-0.5">Partner Operating System</p>
       </div>
 
-      {/* ── Form area ── */}
-      <div className="flex-1 px-5 py-6 flex flex-col gap-5 pb-nav animate-fade-up">
-        <div>
-          <h2 className="text-xl font-bold text-ink">Welcome back</h2>
-          <p className="text-sm text-ink-3 mt-0.5">Sign in to your partner account</p>
-        </div>
+      {/* ── Form container ── */}
+      <div className="flex-1 px-5 py-6 flex flex-col justify-between">
+        <div className="space-y-5 animate-fade-up stagger-1">
+          <div>
+            <h2 className="text-xl font-bold text-ink">Welcome back</h2>
+            <p className="text-sm text-ink-3 mt-1">Sign in to check live requests and your wallet.</p>
+          </div>
 
-        {error && (
-          <ErrorBanner message={error} onRetry={() => setError(null)} />
-        )}
+          {error && <ErrorBanner message={error} />}
 
-        <form onSubmit={handleSubmit} className="flex flex-col gap-4" noValidate>
-          <Input
-            label="Email"
-            type="email"
-            autoComplete="username"
-            inputMode="email"
-            required
-            icon={<Mail className="w-4 h-4" />}
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-          />
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <Input
+              label="Email address"
+              icon={<Mail className="w-4 h-4" />}
+              type="email"
+              autoComplete="username"
+              inputMode="email"
+              placeholder="technician@houserve.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+            />
 
-          <Input
-            label="Password"
-            type="password"
-            autoComplete="current-password"
-            required
-            icon={<Lock className="w-4 h-4" />}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-          />
+            <Input
+              label="Password"
+              icon={<Lock className="w-4 h-4" />}
+              type="password"
+              autoComplete="current-password"
+              placeholder="••••••••"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+            />
 
-          <div className="pt-2">
             <Button
               type="submit"
               variant="primary"
               size="lg"
               full
               loading={loading}
+              className="mt-2"
             >
               Sign In
             </Button>
-          </div>
-        </form>
+          </form>
+        </div>
 
-        <p className="text-center text-sm text-ink-3 pt-2">
-          New partner?{' '}
-          <Link to="/signup" className="text-brand font-medium hover:underline">
-            Register here
-          </Link>
-        </p>
+        {/* ── Footer ── */}
+        <div className="pt-6 pb-nav text-center border-t border-line mt-6">
+          <p className="text-sm text-ink-3">
+            New service partner?{' '}
+            <Link to="/signup" className="text-brand font-semibold hover:underline">
+              Register here
+            </Link>
+          </p>
+        </div>
       </div>
     </div>
   );
 }
-

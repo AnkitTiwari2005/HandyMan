@@ -9,7 +9,7 @@ import { ImpactStyle } from '@capacitor/haptics';
 
 export default function Signup() {
   const navigate = useNavigate();
-  const { fetchProfiles } = useAuthStore();
+  const { setUser, fetchProfiles } = useAuthStore();
 
   const [fullName, setFullName] = useState('');
   const [mobile, setMobile] = useState('');
@@ -24,9 +24,9 @@ export default function Signup() {
     setError(null);
     setNotice(null);
 
-    // Basic client-side validation
     if (password.length < 8) {
-      setError('Password must be at least 8 characters.');
+      setError('Password must be at least 8 characters long.');
+      void triggerHapticImpact(ImpactStyle.Heavy);
       return;
     }
 
@@ -52,11 +52,11 @@ export default function Signup() {
         return;
       }
 
-      if (data.session) {
-        // Auto-confirmed (e.g. email confirmations disabled)
-        await fetchProfiles(data.session.user.id);
+      if (data.user && data.session) {
+        setUser(data.user);
+        await fetchProfiles(data.user.id);
         void triggerHapticImpact(ImpactStyle.Medium);
-        navigate('/kyc');
+        navigate('/kyc', { replace: true });
       } else {
         // Email confirmation required
         setNotice(
@@ -64,8 +64,9 @@ export default function Signup() {
         );
         void triggerHapticImpact(ImpactStyle.Medium);
       }
-    } catch (err) {
-      setError('Something went wrong. Please try again.');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Registration failed. Please try again.';
+      setError(msg);
       void triggerHapticImpact(ImpactStyle.Heavy);
     } finally {
       setLoading(false);
@@ -83,98 +84,99 @@ export default function Signup() {
         <div className="absolute inset-0 opacity-10 bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzMDAiIGhlaWdodD0iMzAwIj48ZmlsdGVyIGlkPSJub2lzZSI+PGZlVHVyYnVsZW5jZSB0eXBlPSJmcmFjdGFsTm9pc2UiIGJhc2VGcmVxdWVuY3k9IjAuNjUiIG51bU9jdGF2ZXM9IjMiIHN0aXRjaFRpbGVzPSJzdGl0Y2giLz48L2ZpbHRlcj48cmVjdCB3aWR0aD0iMzAwIiBoZWlnaHQ9IjMwMCIgZmlsdGVyPSJ1cmwoI25vaXNlKSIgb3BhY2l0eT0iMSIvPjwvc3ZnPg==')] pointer-events-none" />
 
         {/* Logo badge */}
-        <div className="w-16 h-16 rounded-2xl bg-white/20 backdrop-blur-sm flex items-center justify-center mb-4 shadow-lg">
-          <Wrench className="w-9 h-9 text-white" strokeWidth={2.5} />
+        <div className="w-16 h-16 rounded-2xl bg-white shadow-xl flex items-center justify-center mb-3">
+          <Wrench className="w-8 h-8 text-brand" />
         </div>
 
-        <h1 className="font-display text-3xl font-bold text-white">Join as Partner</h1>
-        <p className="text-white/80 text-sm mt-1">Start Earning Today</p>
+        <h1 className="font-display text-3xl font-bold text-white tracking-tight">Join as Partner</h1>
+        <p className="text-white/80 text-sm font-medium mt-0.5">Start Earning Today</p>
       </div>
 
-      {/* ── Form area ── */}
-      <div className="flex-1 px-5 py-6 flex flex-col gap-5 pb-nav animate-fade-up">
-        <div>
-          <h2 className="text-xl font-bold text-ink">Create your account</h2>
-          <p className="text-sm text-ink-3 mt-0.5">Fill in your details to get started</p>
-        </div>
-
-        {error && (
-          <ErrorBanner message={error} onRetry={() => setError(null)} />
-        )}
-
-        {/* Email confirmation notice */}
-        {notice && (
-          <div className="rounded-2xl bg-money-soft border border-money px-4 py-3 flex items-start gap-3">
-            <span className="text-money text-lg mt-0.5">✓</span>
-            <p className="text-sm text-money leading-relaxed">{notice}</p>
+      {/* ── Form container ── */}
+      <div className="flex-1 px-5 py-6 flex flex-col justify-between">
+        <div className="space-y-4 animate-fade-up stagger-1">
+          <div>
+            <h2 className="text-xl font-bold text-ink">Create partner account</h2>
+            <p className="text-sm text-ink-3 mt-1">Get matched with high-paying local jobs.</p>
           </div>
-        )}
 
-        <form onSubmit={handleSubmit} className="flex flex-col gap-4" noValidate>
-          <Input
-            label="Full Name"
-            type="text"
-            autoComplete="name"
-            required
-            icon={<User className="w-4 h-4" />}
-            value={fullName}
-            onChange={(e) => setFullName(e.target.value)}
-          />
+          {error && <ErrorBanner message={error} />}
 
-          <Input
-            label="Mobile Number"
-            type="tel"
-            autoComplete="tel"
-            inputMode="tel"
-            required
-            icon={<Phone className="w-4 h-4" />}
-            value={mobile}
-            onChange={(e) => setMobile(e.target.value)}
-          />
+          {notice && (
+            <div className="rounded-xl bg-money-soft border border-money/30 p-3.5 text-sm text-money font-medium">
+              {notice}
+            </div>
+          )}
 
-          <Input
-            label="Email"
-            type="email"
-            autoComplete="email"
-            inputMode="email"
-            required
-            icon={<Mail className="w-4 h-4" />}
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-          />
+          <form onSubmit={handleSubmit} className="space-y-3.5">
+            <Input
+              label="Full Name"
+              icon={<User className="w-4 h-4" />}
+              type="text"
+              placeholder="e.g. Ramesh Kumar"
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              required
+            />
 
-          <Input
-            label="Password"
-            type="password"
-            autoComplete="new-password"
-            required
-            icon={<Lock className="w-4 h-4" />}
-            hint="Minimum 8 characters"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-          />
+            <Input
+              label="Mobile Number"
+              icon={<Phone className="w-4 h-4" />}
+              type="tel"
+              inputMode="tel"
+              placeholder="+91 9876543210"
+              value={mobile}
+              onChange={(e) => setMobile(e.target.value)}
+              required
+            />
 
-          <div className="pt-2">
+            <Input
+              label="Email address"
+              icon={<Mail className="w-4 h-4" />}
+              type="email"
+              autoComplete="email"
+              inputMode="email"
+              placeholder="technician@houserve.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+            />
+
+            <Input
+              label="Password"
+              icon={<Lock className="w-4 h-4" />}
+              type="password"
+              autoComplete="new-password"
+              placeholder="Min. 8 characters"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              hint="Must be at least 8 characters"
+              required
+            />
+
             <Button
               type="submit"
               variant="primary"
               size="lg"
               full
               loading={loading}
+              className="mt-2"
             >
-              Create Account
+              Continue to Trade Setup
             </Button>
-          </div>
-        </form>
+          </form>
+        </div>
 
-        <p className="text-center text-sm text-ink-3 pt-2">
-          Already registered?{' '}
-          <Link to="/login" className="text-brand font-medium hover:underline">
-            Sign in
-          </Link>
-        </p>
+        {/* ── Footer ── */}
+        <div className="pt-6 pb-nav text-center border-t border-line mt-6">
+          <p className="text-sm text-ink-3">
+            Already registered?{' '}
+            <Link to="/login" className="text-brand font-semibold hover:underline">
+              Sign in here
+            </Link>
+          </p>
+        </div>
       </div>
     </div>
   );
 }
-

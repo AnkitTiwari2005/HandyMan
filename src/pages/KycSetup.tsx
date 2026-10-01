@@ -2,29 +2,31 @@ import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Zap, Wrench, Droplets, Hammer, Paintbrush2, Sparkles, Bug,
-  Upload, Hash, IndianRupee, ShieldCheck,
+  Upload, Hash, IndianRupee, ShieldCheck, CheckCircle2,
 } from 'lucide-react';
 import { Button, Chip, ErrorBanner, Input, Select } from '../components/ui';
 import { useAuthStore } from '../stores/authStore';
 import { supabase } from '../lib/supabase';
+import { triggerHapticImpact } from '../lib/haptics';
+import { ImpactStyle } from '@capacitor/haptics';
 
-/* ─── Trade catalogue ─────────────────────────────────────────── */
+/* ─── Trade catalogue (Title Case to match DB categories) ───────── */
 const TRADES = [
-  { id: 'electrical',      label: 'Electrical',      icon: <Zap className="w-4 h-4" /> },
-  { id: 'appliance_repair',label: 'Appliance Repair', icon: <Wrench className="w-4 h-4" /> },
-  { id: 'plumbing',        label: 'Plumbing',         icon: <Droplets className="w-4 h-4" /> },
-  { id: 'carpentry',       label: 'Carpentry',        icon: <Hammer className="w-4 h-4" /> },
-  { id: 'painting',        label: 'Painting',         icon: <Paintbrush2 className="w-4 h-4" /> },
-  { id: 'cleaning',        label: 'Cleaning',         icon: <Sparkles className="w-4 h-4" /> },
-  { id: 'pest_control',    label: 'Pest Control',     icon: <Bug className="w-4 h-4" /> },
+  { id: 'Electrical',       label: 'Electrical',       icon: <Zap className="w-4 h-4" /> },
+  { id: 'Appliance Repair', label: 'Appliance Repair', icon: <Wrench className="w-4 h-4" /> },
+  { id: 'Plumbing',         label: 'Plumbing',         icon: <Droplets className="w-4 h-4" /> },
+  { id: 'Carpentry',        label: 'Carpentry',        icon: <Hammer className="w-4 h-4" /> },
+  { id: 'Painting',         label: 'Painting',         icon: <Paintbrush2 className="w-4 h-4" /> },
+  { id: 'Cleaning',         label: 'Cleaning',         icon: <Sparkles className="w-4 h-4" /> },
+  { id: 'Pest Control',     label: 'Pest Control',     icon: <Bug className="w-4 h-4" /> },
 ] as const;
 
 /* ─── ID type validators ──────────────────────────────────────── */
 const ID_PATTERNS: Record<string, RegExp | null> = {
-  aadhaar:         /^\d{12}$/,
-  pan:             /^[A-Z]{5}\d{4}[A-Z]{1}$/,
-  driving_license: null, // free-form
-  voter_id:        null,
+  Aadhaar:           /^\d{12}$/,
+  PAN:               /^[A-Z]{5}\d{4}[A-Z]{1}$/,
+  'Driving License': null,
+  'Voter ID':        null,
 };
 
 const UPI_RE = /^[\w.\-]{2,}@[a-zA-Z]{2,}$/;
@@ -52,18 +54,22 @@ function StepDots({ total, active }: { total: number; active: number }) {
 /* ─── Page ───────────────────────────────────────────────────── */
 export default function KycSetup() {
   const navigate = useNavigate();
-  const { user, fetchProfiles } = useAuthStore();
+  const { user, technicianProfile, isLoading, fetchProfiles } = useAuthStore();
 
   // ── Form state ────────────────────────────────────────────────
-  const [selectedTrades, setSelectedTrades] = useState<string[]>([]);
-  const [experience, setExperience]         = useState(3);
-  const [idType, setIdType]                 = useState('aadhaar');
-  const [idNumber, setIdNumber]             = useState('');
+  const [selectedTrades, setSelectedTrades] = useState<string[]>(
+    technicianProfile?.skills && technicianProfile.skills.length > 0
+      ? technicianProfile.skills
+      : ['Electrical']
+  );
+  const [experience, setExperience]         = useState(technicianProfile?.experience_years || 3);
+  const [idType, setIdType]                 = useState(technicianProfile?.id_type || 'Aadhaar');
+  const [idNumber, setIdNumber]             = useState(technicianProfile?.id_number || '');
   const [idFile, setIdFile]                 = useState<File | null>(null);
-  const [upi, setUpi]                       = useState('');
+  const [upi, setUpi]                       = useState(technicianProfile?.bank_upi_id || '');
   const [submitting, setSubmitting]         = useState(false);
   const [error, setError]                   = useState<string | null>(null);
-  const [activeSection, setActiveSection]   = useState(0);
+  const [activeSection]                     = useState(0);
 
   // Field-level errors
   const [idErr, setIdErr]   = useState('');
@@ -71,55 +77,32 @@ export default function KycSetup() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Session guard
+  // Session guard: wait for auth initialization, don't prematurely redirect
   useEffect(() => {
-    if (!user) navigate('/login', { replace: true });
-  }, [user, navigate]);
-
-  // Track scroll section for dots
-  const sectionRefs = [
-    useRef<HTMLDivElement>(null),
-    useRef<HTMLDivElement>(null),
-    useRef<HTMLDivElement>(null),
-    useRef<HTMLDivElement>(null),
-  ];
-  useEffect(() => {
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const visible = entries.filter((e) => e.isIntersecting);
-        if (visible.length) {
-          const topmost = visible.reduce((a, b) =>
-            a.boundingClientRect.top < b.boundingClientRect.top ? a : b
-          );
-          const idx = sectionRefs.findIndex(
-            (r) => r.current === topmost.target
-          );
-          if (idx !== -1) setActiveSection(idx);
-        }
-      },
-      { threshold: 0.4 }
-    );
-    sectionRefs.forEach((r) => r.current && observer.observe(r.current));
-    return () => observer.disconnect();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    if (!isLoading && !user) {
+      navigate('/login', { replace: true });
+    }
+  }, [user, isLoading, navigate]);
 
   // ── Validation helpers ────────────────────────────────────────
   function validateId(type: string, value: string): string {
+    const raw = value.replace(/[\s-]/g, '').toUpperCase();
     const pat = ID_PATTERNS[type];
     if (!pat) return '';
-    if (!pat.test(value.trim().toUpperCase()))
-      return type === 'aadhaar'
+    if (!pat.test(raw)) {
+      return type === 'Aadhaar'
         ? 'Aadhaar must be exactly 12 digits'
-        : type === 'pan'
+        : type === 'PAN'
         ? 'PAN must match ABCDE1234F format'
         : '';
+    }
     return '';
   }
 
   function validateUpi(value: string): string {
-    if (!value.trim()) return 'UPI ID is required';
-    if (!UPI_RE.test(value.trim())) return 'Enter a valid UPI ID (e.g. name@upi)';
+    const trimmed = value.trim();
+    if (!trimmed) return 'UPI ID is required';
+    if (!UPI_RE.test(trimmed)) return 'Enter a valid UPI ID (e.g. name@okhdfcbank)';
     return '';
   }
 
@@ -127,9 +110,11 @@ export default function KycSetup() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    void triggerHapticImpact(ImpactStyle.Light);
 
     if (selectedTrades.length === 0) {
       setError('Please select at least one trade specialty.');
+      void triggerHapticImpact(ImpactStyle.Heavy);
       return;
     }
 
@@ -137,50 +122,86 @@ export default function KycSetup() {
     const upiErrMsg = validateUpi(upi);
     setIdErr(idErrMsg);
     setUpiErr(upiErrMsg);
-    if (idErrMsg || upiErrMsg) return;
+    if (idErrMsg || upiErrMsg) {
+      void triggerHapticImpact(ImpactStyle.Heavy);
+      return;
+    }
 
     setSubmitting(true);
     try {
-      let idDocumentUrl: string | null = null;
-
-      // Upload ID photo if provided
-      if (idFile && user) {
-        const ext = idFile.name.split('.').pop();
-        const path = `kyc/${user.id}/id_doc.${ext}`;
-        const { error: uploadErr } = await supabase.storage
-          .from('technician-docs')
-          .upload(path, idFile, { upsert: true });
-        if (uploadErr) throw new Error('Failed to upload ID photo: ' + uploadErr.message);
-        const { data: urlData } = supabase.storage
-          .from('technician-docs')
-          .getPublicUrl(path);
-        idDocumentUrl = urlData.publicUrl;
+      // 0. Ensure active session
+      const { data: { session } } = await supabase.auth.getSession();
+      const activeUser = session?.user || user;
+      if (!activeUser) {
+        setError('No active session. Please sign in again.');
+        navigate('/login', { replace: true });
+        return;
       }
 
-      const { error: rpcErr } = await supabase.rpc('save_technician_kyc', {
+      let documentUrl: string | null = technicianProfile?.id_document_url || null;
+
+      // 1. Upload ID document to private 'kyc-documents' bucket
+      if (idFile) {
+        const fileExt = idFile.name.split('.').pop() || 'jpg';
+        const filePath = `${activeUser.id}/${Date.now()}.${fileExt}`;
+
+        const { error: uploadErr } = await supabase.storage
+          .from('kyc-documents')
+          .upload(filePath, idFile, { upsert: true });
+
+        if (uploadErr) {
+          throw new Error('Failed to upload ID photo: ' + uploadErr.message);
+        }
+        documentUrl = filePath;
+      }
+
+      if (!documentUrl) {
+        setError('Please upload a photo of your ID document.');
+        void triggerHapticImpact(ImpactStyle.Heavy);
+        return;
+      }
+
+      // 2. Call save_technician_kyc RPC
+      const cleanId = idNumber.replace(/[\s-]/g, '').toUpperCase();
+      const cleanUpi = upi.trim();
+
+      const { data: rpcData, error: rpcError } = await supabase.rpc('save_technician_kyc', {
         p_skills:           selectedTrades,
         p_experience_years: experience,
         p_id_type:          idType,
-        p_id_number:        idNumber.trim().toUpperCase(),
-        p_id_document_url:  idDocumentUrl,
-        p_bank_upi_id:      upi.trim(),
+        p_id_number:        cleanId,
+        p_id_document_url:  documentUrl,
+        p_bank_upi_id:      cleanUpi,
       });
 
-      if (rpcErr) throw new Error(rpcErr.message);
+      if (rpcError) throw rpcError;
 
-      if (user) await fetchProfiles(user.id);
-      navigate('/kyc-pending');
+      if (rpcData && !rpcData.success) {
+        setError(rpcData.message || 'Registration failed. Please try again.');
+        void triggerHapticImpact(ImpactStyle.Heavy);
+        return;
+      }
+
+      void triggerHapticImpact(ImpactStyle.Medium);
+      await fetchProfiles(activeUser.id);
+      navigate('/kyc-pending', { replace: true });
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Something went wrong. Please try again.');
+      const msg = err instanceof Error ? err.message : 'Failed to save KYC configuration';
+      setError(msg);
+      void triggerHapticImpact(ImpactStyle.Heavy);
     } finally {
       setSubmitting(false);
     }
   }
 
-  const toggleTrade = (id: string) =>
+  const toggleTrade = (id: string) => {
+    void triggerHapticImpact(ImpactStyle.Light);
     setSelectedTrades((prev) =>
-      prev.includes(id) ? prev.filter((t) => t !== id) : [...prev, id]
+      prev.includes(id)
+        ? (prev.length > 1 ? prev.filter((t) => t !== id) : prev) // keep at least 1
+        : [...prev, id]
     );
+  };
 
   return (
     <div className="min-h-dvh bg-bg text-ink p-5 max-w-lg mx-auto pb-safe">
@@ -196,7 +217,7 @@ export default function KycSetup() {
               Trades &amp; Verification
             </h1>
             <p className="text-sm text-ink-3 mt-0.5">
-              Complete once — review within 24 hrs.
+              Complete once — verified within 24 hours.
             </p>
           </div>
         </div>
@@ -207,11 +228,11 @@ export default function KycSetup() {
 
       <form onSubmit={handleSubmit} className="space-y-6">
         {/* ── Section 1: Trades ───────────────────────────────────── */}
-        <div ref={sectionRefs[0]} className="space-y-3 animate-fade-up stagger-1">
+        <div className="space-y-3 animate-fade-up stagger-1">
           <div>
             <p className="text-xs font-mono text-brand uppercase tracking-wider mb-0.5">Section 1</p>
             <h2 className="text-base font-semibold text-ink">Your Specialties</h2>
-            <p className="text-sm text-ink-3">Select all trades you're skilled in.</p>
+            <p className="text-sm text-ink-3">Select the trade categories you service.</p>
           </div>
           <div className="grid grid-cols-2 gap-2">
             {TRADES.map((t) => (
@@ -232,7 +253,7 @@ export default function KycSetup() {
         </div>
 
         {/* ── Section 2: Experience ───────────────────────────────── */}
-        <div ref={sectionRefs[1]} className="space-y-3 animate-fade-up stagger-2">
+        <div className="space-y-3 animate-fade-up stagger-2">
           <div>
             <p className="text-xs font-mono text-brand uppercase tracking-wider mb-0.5">Section 2</p>
             <h2 className="text-base font-semibold text-ink">Years of Experience</h2>
@@ -262,34 +283,34 @@ export default function KycSetup() {
         </div>
 
         {/* ── Section 3: Government ID ────────────────────────────── */}
-        <div ref={sectionRefs[2]} className="space-y-3 animate-fade-up stagger-3">
+        <div className="space-y-3 animate-fade-up stagger-3">
           <div>
             <p className="text-xs font-mono text-brand uppercase tracking-wider mb-0.5">Section 3</p>
-            <h2 className="text-base font-semibold text-ink">Government ID</h2>
-            <p className="text-sm text-ink-3">Used only for identity verification.</p>
+            <h2 className="text-base font-semibold text-ink">Government ID Verification</h2>
+            <p className="text-sm text-ink-3">Required for security and partner badge verification.</p>
           </div>
           <div className="bg-card rounded-2xl border border-line p-4 space-y-4">
             <Select
-              label="ID Type"
+              label="ID Document Type"
               value={idType}
               onChange={(e) => {
                 setIdType(e.target.value);
                 setIdErr('');
               }}
             >
-              <option value="aadhaar">Aadhaar Card</option>
-              <option value="pan">PAN Card</option>
-              <option value="driving_license">Driving License</option>
-              <option value="voter_id">Voter ID</option>
+              <option value="Aadhaar">Aadhaar Card</option>
+              <option value="PAN">PAN Card</option>
+              <option value="Driving License">Driving License</option>
+              <option value="Voter ID">Voter ID</option>
             </Select>
 
             <Input
               label="ID Number"
               icon={<Hash className="w-4 h-4" />}
               placeholder={
-                idType === 'aadhaar'
-                  ? '1234 5678 9012'
-                  : idType === 'pan'
+                idType === 'Aadhaar'
+                  ? 'XXXX-XXXX-XXXX'
+                  : idType === 'PAN'
                   ? 'ABCDE1234F'
                   : 'Enter ID number'
               }
@@ -300,13 +321,13 @@ export default function KycSetup() {
               }}
               onBlur={() => setIdErr(validateId(idType, idNumber))}
               error={idErr}
-              className="font-mono tracking-wider"
+              className="font-mono tracking-wider uppercase"
               required
             />
 
             {/* File upload zone */}
             <div className="space-y-1.5">
-              <p className="text-sm font-medium text-ink-2">ID Photo</p>
+              <p className="text-sm font-medium text-ink-2">Upload ID Card Photo</p>
               <label
                 htmlFor="id-upload"
                 className={`
@@ -318,15 +339,17 @@ export default function KycSetup() {
                   }
                 `}
               >
-                <Upload
-                  className={`w-6 h-6 ${idFile ? 'text-brand' : 'text-ink-3'}`}
-                />
                 {idFile ? (
-                  <p className="text-sm font-medium text-brand text-center">{idFile.name}</p>
+                  <>
+                    <CheckCircle2 className="w-6 h-6 text-brand" />
+                    <p className="text-sm font-medium text-brand text-center">{idFile.name}</p>
+                    <p className="text-xs text-ink-3">Tap to change document</p>
+                  </>
                 ) : (
                   <>
-                    <p className="text-sm font-medium text-ink-2">Tap to upload ID photo</p>
-                    <p className="text-xs text-ink-4">JPG, PNG or PDF · max 5 MB</p>
+                    <Upload className="w-6 h-6 text-ink-3" />
+                    <p className="text-sm font-medium text-ink-2">Tap to choose or photograph ID</p>
+                    <p className="text-xs text-ink-4">JPG, PNG or PDF (up to 10 MB)</p>
                   </>
                 )}
                 <input
@@ -347,7 +370,7 @@ export default function KycSetup() {
                     if (fileInputRef.current) fileInputRef.current.value = '';
                   }}
                 >
-                  Remove file
+                  Remove chosen file
                 </button>
               )}
             </div>
@@ -355,17 +378,17 @@ export default function KycSetup() {
         </div>
 
         {/* ── Section 4: UPI / Bank ───────────────────────────────── */}
-        <div ref={sectionRefs[3]} className="space-y-3 animate-fade-up stagger-4">
+        <div className="space-y-3 animate-fade-up stagger-4">
           <div>
             <p className="text-xs font-mono text-brand uppercase tracking-wider mb-0.5">Section 4</p>
-            <h2 className="text-base font-semibold text-ink">Payment Details</h2>
-            <p className="text-sm text-ink-3">Where your earnings are sent.</p>
+            <h2 className="text-base font-semibold text-ink">Payout Settlement (UPI)</h2>
+            <p className="text-sm text-ink-3">Your completed job earnings are credited directly here.</p>
           </div>
-          <div className="bg-card rounded-2xl border border-line p-4">
+          <div className="bg-card rounded-2xl border border-line p-4 space-y-3">
             <Input
-              label="UPI ID / Bank Account"
+              label="UPI ID"
               icon={<IndianRupee className="w-4 h-4" />}
-              placeholder="yourname@upi"
+              placeholder="e.g. name@okhdfcbank or 9876543210@paytm"
               value={upi}
               onChange={(e) => {
                 setUpi(e.target.value);
@@ -373,27 +396,25 @@ export default function KycSetup() {
               }}
               onBlur={() => setUpiErr(validateUpi(upi))}
               error={upiErr}
-              hint="e.g. name@paytm, name@ybl, name@oksbi"
+              hint="Payments are deposited directly to your bank account via this UPI ID"
+              className="font-mono"
               required
             />
           </div>
         </div>
 
-        {/* ── Submit ──────────────────────────────────────────────── */}
-        <div className="pt-2 pb-4 animate-fade-up stagger-5">
+        {/* ── Submit button ───────────────────────────────────────── */}
+        <div className="pt-2 pb-nav">
           <Button
             type="submit"
             variant="primary"
             size="lg"
             full
             loading={submitting}
-            icon={<ShieldCheck className="w-5 h-5" />}
+            disabled={submitting || selectedTrades.length === 0}
           >
             Submit for Verification
           </Button>
-          <p className="text-xs text-ink-4 text-center mt-3">
-            Your data is encrypted and only used for partner verification.
-          </p>
         </div>
       </form>
     </div>

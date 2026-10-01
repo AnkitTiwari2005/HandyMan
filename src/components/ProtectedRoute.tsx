@@ -115,8 +115,12 @@ export const ProtectedRoute = () => {
 
 // ── Public Route (redirect logged-in users away) ──────────────
 export const PublicRoute = () => {
-  const { user, isLoading } = useAuthStore();
-  if (isLoading) return <FullScreenLoader />;
-  if (user) return <Navigate to="/" replace />;
+  const { user, technicianProfile, isLoading, profileLoadedFor } = useAuthStore();
+  if (isLoading || (user && profileLoadedFor !== user.id)) return <FullScreenLoader />;
+  if (user) {
+    if (!technicianProfile) return <Navigate to="/kyc" replace />;
+    if (technicianProfile.verification_status !== 'approved') return <Navigate to="/kyc-pending" replace />;
+    return <Navigate to="/" replace />;
+  }
   return <Outlet />;
 };
