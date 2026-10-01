@@ -33,3 +33,12 @@ dist-ssr
 *.zip
 reference/
 revamped-reference/
+
+# Android build outputs
+*.apk
+*.aab
+android/.gradle/
+android/app/build/
+android/build/
+android/capacitor-cordova-android-plugins/build/
+
