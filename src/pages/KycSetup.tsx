@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   Zap, Wrench, Droplets, Paintbrush, Sparkles, Hammer, Bug, 
@@ -36,6 +36,14 @@ export default function KycSetup() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session) {
+        navigate('/login', { replace: true });
+      }
+    });
+  }, [navigate]);
+
   const toggleTrade = (tradeId: string) => {
     triggerHapticImpact();
     setSelectedTrades((prev) => 
@@ -58,16 +66,16 @@ export default function KycSetup() {
     setError(null);
 
     try {
-      // 0. Ensure active session exists in supabase client
+      // 0. Ensure active authenticated session
       const { data: { session } } = await supabase.auth.getSession();
-      const activeUser = session?.user || user;
 
-      if (!activeUser) {
-        setError('No active session found. Please sign in again.');
+      if (!session?.user) {
+        setError('No active session. Please sign in with your email and password.');
         navigate('/login', { replace: true });
         return;
       }
 
+      const activeUser = session.user;
       let documentUrl = technicianProfile?.id_document_url || null;
 
       // 1. Upload ID document to private bucket if selected
@@ -84,7 +92,7 @@ export default function KycSetup() {
         }
       }
 
-      // 2. Try atomic RPC first (Security Definer avoids RLS conflicts & updates role to technician)
+      // 2. Call atomic Security Definer RPC
       const { data: rpcData, error: rpcError } = await supabase.rpc('save_technician_kyc', {
         p_skills: selectedTrades,
         p_experience_years: experienceYears,
@@ -94,31 +102,14 @@ export default function KycSetup() {
         p_bank_upi_id: upiId,
       });
 
-      if (!rpcError && rpcData?.success) {
-        await fetchProfiles(activeUser.id);
-        navigate('/', { replace: true });
-        return;
+      if (rpcError) {
+        throw rpcError;
       }
 
-      // Fallback: direct upsert
-      const payload = {
-        id: activeUser.id,
-        skills: selectedTrades,
-        experience_years: experienceYears,
-        id_type: idType,
-        id_number: idNumber,
-        id_document_url: documentUrl,
-        bank_upi_id: upiId,
-        verification_status: 'approved',
-        is_online: true,
-        updated_at: new Date().toISOString(),
-      };
-
-      const { error: upsertError } = await supabase
-        .from('technician_profiles')
-        .upsert(payload);
-
-      if (upsertError) throw upsertError;
+      if (rpcData && !rpcData.success) {
+        setError(rpcData.message || 'Registration failed. Please sign in again.');
+        return;
+      }
 
       await fetchProfiles(activeUser.id);
       navigate('/', { replace: true });

@@ -37,10 +37,29 @@ export default function Signup() {
 
       if (authError) throw authError;
 
-      if (data.user) {
-        setUser(data.user);
-        await fetchProfiles(data.user.id);
+      // Ensure active session is established
+      let activeUser = data.user;
+      let activeSession = data.session;
+
+      if (!activeSession && data.user) {
+        // Attempt immediate login if auto-confirmed
+        const { data: loginData } = await supabase.auth.signInWithPassword({
+          email: email.trim(),
+          password,
+        });
+        if (loginData?.session) {
+          activeSession = loginData.session;
+          activeUser = loginData.user;
+        }
+      }
+
+      if (activeSession && activeUser) {
+        setUser(activeUser);
+        await fetchProfiles(activeUser.id);
         navigate('/kyc', { replace: true });
+      } else {
+        // Redirect to login to authenticate with confirmed credentials
+        navigate('/login', { replace: true });
       }
     } catch (err: any) {
       setError(err.message || 'Registration failed. Please check details.');
