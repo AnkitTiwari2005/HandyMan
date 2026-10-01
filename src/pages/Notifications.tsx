@@ -1,132 +1,218 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bell, Check, Loader2 } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import { Bell, ChevronRight } from 'lucide-react';
+import { Button, EmptyState, ErrorBanner, PageHeader, SkeletonCard } from '../components/ui';
 import { useAuthStore } from '../stores/authStore';
+import { supabase } from '../lib/supabase';
+import { formatDateTime } from '../lib/format';
 import type { NotificationItem } from '../types';
 
+/* ─── Page ───────────────────────────────────────────────────── */
 export default function Notifications() {
-  const { user } = useAuthStore();
   const navigate = useNavigate();
-  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { user } = useAuthStore();
+
+  const [items, setItems]       = useState<NotificationItem[]>([]);
+  const [loading, setLoading]   = useState(true);
+  const [error, setError]       = useState<string | null>(null);
+
+  const unreadCount = items.filter((n) => !n.is_read).length;
+
+  /* ── Fetch ─────────────────────────────────────────────────── */
+  const fetchNotifications = useCallback(async () => {
+    if (!user) return;
+    setError(null);
+    try {
+      const { data, error: fetchErr } = await supabase
+        .from('notifications')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(60);
+
+      if (fetchErr) throw new Error(fetchErr.message);
+      setItems((data ?? []) as NotificationItem[]);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to load notifications.');
+    } finally {
+      setLoading(false);
+    }
+  }, [user]);
 
   useEffect(() => {
+    fetchNotifications();
+  }, [fetchNotifications]);
+
+  /* ── Realtime subscription ─────────────────────────────────── */
+  useEffect(() => {
     if (!user) return;
-    fetchNotifications(false);
 
     const channel = supabase
-      .channel('partner-notifications')
+      .channel(`notifications:${user.id}`)
       .on(
         'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${user.id}` },
-        () => {
-          fetchNotifications();
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'notifications',
+          filter: `user_id=eq.${user.id}`,
+        },
+        (payload) => {
+          const newItem = payload.new as NotificationItem;
+          setItems((prev) => [newItem, ...prev]);
         }
       )
       .subscribe();
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    return () => { supabase.removeChannel(channel); };
   }, [user]);
 
-  const fetchNotifications = async (silent = true) => {
-    try {
-      if (!silent) setLoading(true);
-      const { data, error } = await supabase
-        .from('notifications')
-        .select('*')
-        .eq('user_id', user?.id)
-        .order('created_at', { ascending: false });
-
-      if (!error && data) {
-        setNotifications(data as NotificationItem[]);
-      }
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const openNotification = async (n: NotificationItem) => {
-    if (!n.is_read) {
-      setNotifications((prev) => prev.map((x) => (x.id === n.id ? { ...x, is_read: true } : x)));
-      await supabase.from('notifications').update({ is_read: true }).eq('id', n.id);
-    }
-    if (n.booking_id) navigate(`/job/${n.booking_id}`);
-  };
-
-  const markAllAsRead = async () => {
-    if (!user) return;
-    try {
+  /* ── Actions ───────────────────────────────────────────────── */
+  async function openNotification(item: NotificationItem) {
+    // Optimistic update
+    if (!item.is_read) {
+      setItems((prev) =>
+        prev.map((n) => (n.id === item.id ? { ...n, is_read: true } : n))
+      );
       await supabase
         .from('notifications')
         .update({ is_read: true })
-        .eq('user_id', user.id);
-
-      setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
-    } catch (e) {
-      console.error(e);
+        .eq('id', item.id);
     }
-  };
+    if (item.booking_id) {
+      navigate(`/job/${item.booking_id}`);
+    }
+  }
 
+  async function markAllRead() {
+    if (!user || unreadCount === 0) return;
+
+    // Optimistic update
+    setItems((prev) => prev.map((n) => ({ ...n, is_read: true })));
+
+    const unreadIds = items.filter((n) => !n.is_read).map((n) => n.id);
+    if (unreadIds.length === 0) return;
+
+    await supabase
+      .from('notifications')
+      .update({ is_read: true })
+      .in('id', unreadIds);
+  }
+
+  /* ── Render ────────────────────────────────────────────────── */
   return (
-    <div className="p-4 space-y-4 max-w-lg mx-auto pb-safe">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-syne font-bold text-white">Notifications</h1>
-          <p className="text-xs text-slate-400">Order updates & payout alerts</p>
-        </div>
-        {notifications.some((n) => !n.is_read) && (
-          <button
-            onClick={markAllAsRead}
-            className="text-xs font-syne font-bold text-orange-400 hover:underline flex items-center gap-1"
-          >
-            <Check className="w-3.5 h-3.5" />
-            <span>Mark read</span>
-          </button>
-        )}
+    <div className="p-4 space-y-4 max-w-lg mx-auto pb-nav">
+      {/* Header */}
+      <div className="animate-fade-up">
+        <PageHeader
+          title="Notifications"
+          subtitle="Updates &amp; alerts"
+          action={
+            unreadCount > 0 ? (
+              <Button variant="ghost" size="sm" onClick={markAllRead}>
+                Mark all read
+              </Button>
+            ) : undefined
+          }
+        />
       </div>
 
-      {loading ? (
-        <div className="p-12 text-center">
-          <Loader2 className="w-6 h-6 animate-spin text-orange-500 mx-auto mb-2" />
-          <p className="text-xs text-slate-400">Loading alerts...</p>
+      {/* Error */}
+      {error && (
+        <ErrorBanner
+          message={error}
+          onRetry={fetchNotifications}
+          className="animate-fade-up stagger-1"
+        />
+      )}
+
+      {/* Loading skeletons */}
+      {loading && (
+        <div className="space-y-2 animate-fade-up stagger-1">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <SkeletonCard key={i} lines={3} />
+          ))}
         </div>
-      ) : notifications.length === 0 ? (
-        <div className="p-12 rounded-3xl bg-slate-900/50 border border-slate-800 text-center">
-          <Bell className="w-12 h-12 text-slate-600 mx-auto mb-3" />
-          <p className="font-syne font-bold text-sm text-slate-300">All caught up!</p>
-          <p className="text-xs text-slate-500 mt-1">No new notifications at this time.</p>
+      )}
+
+      {/* Empty state */}
+      {!loading && !error && items.length === 0 && (
+        <div className="animate-fade-up stagger-2">
+          <EmptyState
+            icon={<Bell className="w-7 h-7" />}
+            title="All clear!"
+            body="No new alerts. Accepted jobs and earnings appear here."
+          />
         </div>
-      ) : (
-        <div className="space-y-2.5">
-          {notifications.map((n) => (
-            <button
-              key={n.id}
-              onClick={() => openNotification(n)}
-              className={`w-full text-left p-4 rounded-2xl border transition-all ${
-                n.is_read
-                  ? 'bg-slate-900/60 border-slate-800/80 text-slate-400'
-                  : 'bg-slate-900 border-orange-500/30 text-slate-200 shadow-md'
-              }`}
-            >
-              <div className="flex items-start justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  {!n.is_read && <span className="w-2 h-2 rounded-full bg-orange-500" />}
-                  <h4 className="font-syne font-bold text-sm text-white">{n.title}</h4>
-                </div>
-                <span className="text-[10px] font-mono text-slate-500">
-                  {new Date(n.created_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}
-                </span>
-              </div>
-              <p className="text-sm text-slate-300 mt-1 leading-relaxed">{n.body}</p>
-            </button>
+      )}
+
+      {/* Notification list */}
+      {!loading && items.length > 0 && (
+        <div className="space-y-2 animate-fade-up stagger-1">
+          {items.map((item, idx) => (
+            <NotificationRow
+              key={item.id}
+              item={item}
+              delay={Math.min(idx, 4) as 0 | 1 | 2 | 3 | 4}
+              onOpen={openNotification}
+            />
           ))}
         </div>
       )}
     </div>
+  );
+}
+
+/* ─── Notification row ───────────────────────────────────────── */
+interface RowProps {
+  item: NotificationItem;
+  delay: 0 | 1 | 2 | 3 | 4;
+  onOpen: (item: NotificationItem) => void;
+}
+
+function NotificationRow({ item, onOpen }: RowProps) {
+  const isUnread = !item.is_read;
+
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(item)}
+      className={`
+        w-full text-left rounded-2xl border p-4 transition-all duration-200
+        ${isUnread
+          ? 'bg-card border-brand/30 shadow-sm shadow-brand/5 hover:border-brand/50'
+          : 'bg-card-2/50 border-line opacity-80 hover:opacity-100'
+        }
+      `}
+    >
+      <div className="flex items-start gap-3">
+        {/* Unread dot */}
+        <div className="mt-1.5 shrink-0 w-2 h-2">
+          {isUnread && (
+            <span className="block w-2 h-2 rounded-full bg-brand pulse-brand" />
+          )}
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-start justify-between gap-2">
+            <p className={`text-sm leading-snug ${isUnread ? 'font-semibold text-ink' : 'font-medium text-ink-2'}`}>
+              {item.title}
+            </p>
+            <span className="font-mono text-xs text-ink-3 whitespace-nowrap shrink-0">
+              {formatDateTime(item.created_at)}
+            </span>
+          </div>
+          <p className="text-sm text-ink-3 mt-1 leading-relaxed line-clamp-2">
+            {item.body}
+          </p>
+        </div>
+
+        {/* Chevron if navigable */}
+        {item.booking_id && (
+          <ChevronRight className="w-4 h-4 text-ink-4 shrink-0 mt-0.5" />
+        )}
+      </div>
+    </button>
   );
 }

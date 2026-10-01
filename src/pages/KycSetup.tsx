@@ -1,316 +1,400 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { 
-  Zap, Wrench, Droplets, Paintbrush, Sparkles, Hammer, Bug, 
-  Upload, ShieldCheck, CheckCircle2, AlertCircle, Loader2, ArrowRight 
+import {
+  Zap, Wrench, Droplets, Hammer, Paintbrush2, Sparkles, Bug,
+  Upload, Hash, IndianRupee, ShieldCheck,
 } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import { Button, Chip, ErrorBanner, Input, Select } from '../components/ui';
 import { useAuthStore } from '../stores/authStore';
-import { triggerHapticImpact } from '../lib/haptics';
+import { supabase } from '../lib/supabase';
 
+/* ─── Trade catalogue ─────────────────────────────────────────── */
 const TRADES = [
-  { id: 'Electrical', name: 'Electrical', icon: Zap, color: 'text-amber-400 bg-amber-400/10 border-amber-400/30' },
-  { id: 'Appliance Repair', name: 'Appliance Repair', icon: Wrench, color: 'text-blue-400 bg-blue-400/10 border-blue-400/30' },
-  { id: 'Plumbing', name: 'Plumbing', icon: Droplets, color: 'text-cyan-400 bg-cyan-400/10 border-cyan-400/30' },
-  { id: 'Carpentry', name: 'Carpentry', icon: Hammer, color: 'text-orange-400 bg-orange-400/10 border-orange-400/30' },
-  { id: 'Painting', name: 'Painting', icon: Paintbrush, color: 'text-pink-400 bg-pink-400/10 border-pink-400/30' },
-  { id: 'Cleaning', name: 'Cleaning', icon: Sparkles, color: 'text-emerald-400 bg-emerald-400/10 border-emerald-400/30' },
-  { id: 'Pest Control', name: 'Pest Control', icon: Bug, color: 'text-rose-400 bg-rose-400/10 border-rose-400/30' },
-];
+  { id: 'electrical',      label: 'Electrical',      icon: <Zap className="w-4 h-4" /> },
+  { id: 'appliance_repair',label: 'Appliance Repair', icon: <Wrench className="w-4 h-4" /> },
+  { id: 'plumbing',        label: 'Plumbing',         icon: <Droplets className="w-4 h-4" /> },
+  { id: 'carpentry',       label: 'Carpentry',        icon: <Hammer className="w-4 h-4" /> },
+  { id: 'painting',        label: 'Painting',         icon: <Paintbrush2 className="w-4 h-4" /> },
+  { id: 'cleaning',        label: 'Cleaning',         icon: <Sparkles className="w-4 h-4" /> },
+  { id: 'pest_control',    label: 'Pest Control',     icon: <Bug className="w-4 h-4" /> },
+] as const;
 
+/* ─── ID type validators ──────────────────────────────────────── */
+const ID_PATTERNS: Record<string, RegExp | null> = {
+  aadhaar:         /^\d{12}$/,
+  pan:             /^[A-Z]{5}\d{4}[A-Z]{1}$/,
+  driving_license: null, // free-form
+  voter_id:        null,
+};
+
+const UPI_RE = /^[\w.\-]{2,}@[a-zA-Z]{2,}$/;
+
+/* ─── Section dot indicator ──────────────────────────────────────*/
+function StepDots({ total, active }: { total: number; active: number }) {
+  return (
+    <div className="flex items-center gap-1.5">
+      {Array.from({ length: total }).map((_, i) => (
+        <span
+          key={i}
+          className={`block rounded-full transition-all duration-300 ${
+            i === active
+              ? 'w-4 h-2 bg-brand'
+              : i < active
+              ? 'w-2 h-2 bg-brand/40'
+              : 'w-2 h-2 bg-line'
+          }`}
+        />
+      ))}
+    </div>
+  );
+}
+
+/* ─── Page ───────────────────────────────────────────────────── */
 export default function KycSetup() {
   const navigate = useNavigate();
-  const { user, technicianProfile, fetchProfiles } = useAuthStore();
+  const { user, fetchProfiles } = useAuthStore();
 
-  const [selectedTrades, setSelectedTrades] = useState<string[]>(
-    technicianProfile?.skills && technicianProfile.skills.length > 0 
-      ? technicianProfile.skills 
-      : ['Electrical']
-  );
-  const [experienceYears, setExperienceYears] = useState(technicianProfile?.experience_years || 2);
-  const [idType, setIdType] = useState(technicianProfile?.id_type || 'Aadhaar');
-  const [idNumber, setIdNumber] = useState(technicianProfile?.id_number || '');
-  const [upiId, setUpiId] = useState(technicianProfile?.bank_upi_id || '');
-  const [file, setFile] = useState<File | null>(null);
-  
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // ── Form state ────────────────────────────────────────────────
+  const [selectedTrades, setSelectedTrades] = useState<string[]>([]);
+  const [experience, setExperience]         = useState(3);
+  const [idType, setIdType]                 = useState('aadhaar');
+  const [idNumber, setIdNumber]             = useState('');
+  const [idFile, setIdFile]                 = useState<File | null>(null);
+  const [upi, setUpi]                       = useState('');
+  const [submitting, setSubmitting]         = useState(false);
+  const [error, setError]                   = useState<string | null>(null);
+  const [activeSection, setActiveSection]   = useState(0);
 
+  // Field-level errors
+  const [idErr, setIdErr]   = useState('');
+  const [upiErr, setUpiErr] = useState('');
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Session guard
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (!session) {
-        navigate('/login', { replace: true });
-      }
-    });
-  }, [navigate]);
+    if (!user) navigate('/login', { replace: true });
+  }, [user, navigate]);
 
-  const toggleTrade = (tradeId: string) => {
-    triggerHapticImpact();
-    setSelectedTrades((prev) => 
-      prev.includes(tradeId)
-        ? (prev.length > 1 ? prev.filter(t => t !== tradeId) : prev) // keep at least 1
-        : [...prev, tradeId]
+  // Track scroll section for dots
+  const sectionRefs = [
+    useRef<HTMLDivElement>(null),
+    useRef<HTMLDivElement>(null),
+    useRef<HTMLDivElement>(null),
+    useRef<HTMLDivElement>(null),
+  ];
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries.filter((e) => e.isIntersecting);
+        if (visible.length) {
+          const topmost = visible.reduce((a, b) =>
+            a.boundingClientRect.top < b.boundingClientRect.top ? a : b
+          );
+          const idx = sectionRefs.findIndex(
+            (r) => r.current === topmost.target
+          );
+          if (idx !== -1) setActiveSection(idx);
+        }
+      },
+      { threshold: 0.4 }
     );
-  };
+    sectionRefs.forEach((r) => r.current && observer.observe(r.current));
+    return () => observer.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      setFile(e.target.files[0]);
-    }
-  };
+  // ── Validation helpers ────────────────────────────────────────
+  function validateId(type: string, value: string): string {
+    const pat = ID_PATTERNS[type];
+    if (!pat) return '';
+    if (!pat.test(value.trim().toUpperCase()))
+      return type === 'aadhaar'
+        ? 'Aadhaar must be exactly 12 digits'
+        : type === 'pan'
+        ? 'PAN must match ABCDE1234F format'
+        : '';
+    return '';
+  }
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  function validateUpi(value: string): string {
+    if (!value.trim()) return 'UPI ID is required';
+    if (!UPI_RE.test(value.trim())) return 'Enter a valid UPI ID (e.g. name@upi)';
+    return '';
+  }
+
+  // ── Submit ────────────────────────────────────────────────────
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    triggerHapticImpact();
-    setLoading(true);
     setError(null);
 
+    if (selectedTrades.length === 0) {
+      setError('Please select at least one trade specialty.');
+      return;
+    }
+
+    const idErrMsg = validateId(idType, idNumber);
+    const upiErrMsg = validateUpi(upi);
+    setIdErr(idErrMsg);
+    setUpiErr(upiErrMsg);
+    if (idErrMsg || upiErrMsg) return;
+
+    setSubmitting(true);
     try {
-      // 0. Ensure active authenticated session
-      const { data: { session } } = await supabase.auth.getSession();
+      let idDocumentUrl: string | null = null;
 
-      if (!session?.user) {
-        setError('No active session. Please sign in with your email and password.');
-        navigate('/login', { replace: true });
-        return;
+      // Upload ID photo if provided
+      if (idFile && user) {
+        const ext = idFile.name.split('.').pop();
+        const path = `kyc/${user.id}/id_doc.${ext}`;
+        const { error: uploadErr } = await supabase.storage
+          .from('technician-docs')
+          .upload(path, idFile, { upsert: true });
+        if (uploadErr) throw new Error('Failed to upload ID photo: ' + uploadErr.message);
+        const { data: urlData } = supabase.storage
+          .from('technician-docs')
+          .getPublicUrl(path);
+        idDocumentUrl = urlData.publicUrl;
       }
 
-      const activeUser = session.user;
-      let documentUrl = technicianProfile?.id_document_url || null;
-
-      // 1. Upload ID document to private bucket if selected
-      if (file) {
-        const fileExt = file.name.split('.').pop();
-        const filePath = `${activeUser.id}/${Date.now()}.${fileExt}`;
-        
-        const { error: uploadError } = await supabase.storage
-          .from('kyc-documents')
-          .upload(filePath, file, { upsert: true });
-
-        if (uploadError) {
-          setError('Could not upload your ID photo. Check your connection and try again.');
-          return;
-        }
-        documentUrl = filePath;
-      }
-
-      if (!documentUrl) {
-        setError('Please upload a photo of your ID.');
-        return;
-      }
-      const upi = upiId.trim();
-      if (!/^[\w.\-]{2,}@[a-zA-Z]{2,}$/.test(upi)) {
-        setError('Enter a valid UPI ID, for example name@okhdfcbank');
-        return;
-      }
-      const id = idNumber.replace(/[\s-]/g, '');
-      if (idType === 'Aadhaar' && !/^\d{12}$/.test(id)) {
-        setError('Aadhaar number must be 12 digits.');
-        return;
-      }
-      if (idType === 'PAN' && !/^[A-Za-z]{5}\d{4}[A-Za-z]$/.test(id)) {
-        setError('PAN must look like ABCDE1234F.');
-        return;
-      }
-
-      // 2. Call atomic Security Definer RPC
-      const { data: rpcData, error: rpcError } = await supabase.rpc('save_technician_kyc', {
-        p_skills: selectedTrades,
-        p_experience_years: experienceYears,
-        p_id_type: idType,
-        p_id_number: idNumber,
-        p_id_document_url: documentUrl,
-        p_bank_upi_id: upiId.trim(),
+      const { error: rpcErr } = await supabase.rpc('save_technician_kyc', {
+        p_skills:           selectedTrades,
+        p_experience_years: experience,
+        p_id_type:          idType,
+        p_id_number:        idNumber.trim().toUpperCase(),
+        p_id_document_url:  idDocumentUrl,
+        p_bank_upi_id:      upi.trim(),
       });
 
-      if (rpcError) {
-        throw rpcError;
-      }
+      if (rpcErr) throw new Error(rpcErr.message);
 
-      if (rpcData && !rpcData.success) {
-        setError(rpcData.message || 'Registration failed. Please sign in again.');
-        return;
-      }
-
-      await fetchProfiles(activeUser.id);
-      // Approval is no longer automatic: new partners wait for verification.
-      navigate('/kyc-pending', { replace: true });
-    } catch (err: any) {
-      setError(err.message || 'Failed to save KYC configuration');
+      if (user) await fetchProfiles(user.id);
+      navigate('/kyc-pending');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Something went wrong. Please try again.');
     } finally {
-      setLoading(false);
+      setSubmitting(false);
     }
-  };
+  }
+
+  const toggleTrade = (id: string) =>
+    setSelectedTrades((prev) =>
+      prev.includes(id) ? prev.filter((t) => t !== id) : [...prev, id]
+    );
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 p-5 max-w-lg mx-auto pb-safe">
-      <div className="pt-safe mb-6">
-        <div className="flex items-center gap-2 mb-2">
-          <div className="p-2 rounded-xl bg-orange-500/10 text-orange-400 border border-orange-500/20">
-            <ShieldCheck className="w-5 h-5" />
+    <div className="min-h-dvh bg-bg text-ink p-5 max-w-lg mx-auto pb-safe">
+      {/* ── Header ──────────────────────────────────────────────── */}
+      <div className="pt-safe flex items-start justify-between mb-8 animate-fade-up">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-2xl bg-brand-soft border border-brand/30 flex items-center justify-center shrink-0">
+            <ShieldCheck className="w-5 h-5 text-brand" />
           </div>
-          <span className="text-xs font-mono font-bold text-orange-400 uppercase tracking-widest">
-            Last step
-          </span>
+          <div>
+            <p className="text-xs font-mono text-brand uppercase tracking-wider">Setup Your Profile</p>
+            <h1 className="font-display text-2xl font-bold text-ink leading-tight">
+              Trades &amp; Verification
+            </h1>
+            <p className="text-sm text-ink-3 mt-0.5">
+              Complete once — review within 24 hrs.
+            </p>
+          </div>
         </div>
-        <h1 className="text-2xl font-syne font-bold text-white">Trades & KYC Verification</h1>
-        <p className="text-xs text-slate-400 mt-1">
-          Select your service skills to receive matched customer requests on the Radar.
-        </p>
+        <StepDots total={4} active={activeSection} />
       </div>
 
-      {error && (
-        <div className="mb-4 p-3 rounded-2xl bg-rose-950/60 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
-          <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
-          <span>{error}</span>
-        </div>
-      )}
+      {error && <ErrorBanner message={error} className="mb-5 animate-fade-up stagger-1" />}
 
       <form onSubmit={handleSubmit} className="space-y-6">
-        {/* Section 1: Trade Selection */}
-        <div>
-          <label className="block text-xs font-syne font-bold uppercase tracking-wider text-slate-300 mb-2.5">
-            Select Your Trades / Specialties <span className="text-orange-400">*</span>
-          </label>
-          <div className="grid grid-cols-2 gap-2.5">
-            {TRADES.map((trade) => {
-              const Icon = trade.icon;
-              const isSelected = selectedTrades.includes(trade.id);
+        {/* ── Section 1: Trades ───────────────────────────────────── */}
+        <div ref={sectionRefs[0]} className="space-y-3 animate-fade-up stagger-1">
+          <div>
+            <p className="text-xs font-mono text-brand uppercase tracking-wider mb-0.5">Section 1</p>
+            <h2 className="text-base font-semibold text-ink">Your Specialties</h2>
+            <p className="text-sm text-ink-3">Select all trades you're skilled in.</p>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            {TRADES.map((t) => (
+              <Chip
+                key={t.id}
+                label={t.label}
+                icon={t.icon}
+                selected={selectedTrades.includes(t.id)}
+                onClick={() => toggleTrade(t.id)}
+              />
+            ))}
+          </div>
+          {selectedTrades.length > 0 && (
+            <p className="text-xs text-brand font-medium">
+              {selectedTrades.length} trade{selectedTrades.length > 1 ? 's' : ''} selected
+            </p>
+          )}
+        </div>
 
-              return (
+        {/* ── Section 2: Experience ───────────────────────────────── */}
+        <div ref={sectionRefs[1]} className="space-y-3 animate-fade-up stagger-2">
+          <div>
+            <p className="text-xs font-mono text-brand uppercase tracking-wider mb-0.5">Section 2</p>
+            <h2 className="text-base font-semibold text-ink">Years of Experience</h2>
+          </div>
+          <div className="bg-card rounded-2xl border border-line p-4 space-y-4">
+            <div className="flex items-end justify-between">
+              <p className="text-sm text-ink-2">Experience level</p>
+              <div className="text-right">
+                <span className="font-mono text-3xl font-bold text-brand">{experience}</span>
+                <span className="text-sm text-ink-3 ml-1">yr{experience !== 1 ? 's' : ''}</span>
+              </div>
+            </div>
+            <input
+              type="range"
+              min={1}
+              max={15}
+              step={1}
+              value={experience}
+              onChange={(e) => setExperience(Number(e.target.value))}
+              className="w-full accent-[var(--color-brand)] cursor-pointer"
+            />
+            <div className="flex justify-between text-xs text-ink-4 font-mono">
+              <span>1 yr</span>
+              <span>15 yrs</span>
+            </div>
+          </div>
+        </div>
+
+        {/* ── Section 3: Government ID ────────────────────────────── */}
+        <div ref={sectionRefs[2]} className="space-y-3 animate-fade-up stagger-3">
+          <div>
+            <p className="text-xs font-mono text-brand uppercase tracking-wider mb-0.5">Section 3</p>
+            <h2 className="text-base font-semibold text-ink">Government ID</h2>
+            <p className="text-sm text-ink-3">Used only for identity verification.</p>
+          </div>
+          <div className="bg-card rounded-2xl border border-line p-4 space-y-4">
+            <Select
+              label="ID Type"
+              value={idType}
+              onChange={(e) => {
+                setIdType(e.target.value);
+                setIdErr('');
+              }}
+            >
+              <option value="aadhaar">Aadhaar Card</option>
+              <option value="pan">PAN Card</option>
+              <option value="driving_license">Driving License</option>
+              <option value="voter_id">Voter ID</option>
+            </Select>
+
+            <Input
+              label="ID Number"
+              icon={<Hash className="w-4 h-4" />}
+              placeholder={
+                idType === 'aadhaar'
+                  ? '1234 5678 9012'
+                  : idType === 'pan'
+                  ? 'ABCDE1234F'
+                  : 'Enter ID number'
+              }
+              value={idNumber}
+              onChange={(e) => {
+                setIdNumber(e.target.value);
+                setIdErr('');
+              }}
+              onBlur={() => setIdErr(validateId(idType, idNumber))}
+              error={idErr}
+              className="font-mono tracking-wider"
+              required
+            />
+
+            {/* File upload zone */}
+            <div className="space-y-1.5">
+              <p className="text-sm font-medium text-ink-2">ID Photo</p>
+              <label
+                htmlFor="id-upload"
+                className={`
+                  flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed
+                  p-5 cursor-pointer transition-all duration-200
+                  ${idFile
+                    ? 'border-brand/50 bg-brand-soft'
+                    : 'border-line bg-card-2 hover:border-ink-3'
+                  }
+                `}
+              >
+                <Upload
+                  className={`w-6 h-6 ${idFile ? 'text-brand' : 'text-ink-3'}`}
+                />
+                {idFile ? (
+                  <p className="text-sm font-medium text-brand text-center">{idFile.name}</p>
+                ) : (
+                  <>
+                    <p className="text-sm font-medium text-ink-2">Tap to upload ID photo</p>
+                    <p className="text-xs text-ink-4">JPG, PNG or PDF · max 5 MB</p>
+                  </>
+                )}
+                <input
+                  ref={fileInputRef}
+                  id="id-upload"
+                  type="file"
+                  accept="image/*,application/pdf"
+                  className="sr-only"
+                  onChange={(e) => setIdFile(e.target.files?.[0] ?? null)}
+                />
+              </label>
+              {idFile && (
                 <button
                   type="button"
-                  key={trade.id}
-                  onClick={() => toggleTrade(trade.id)}
-                  className={`p-3.5 rounded-2xl border text-left transition-all flex items-center gap-3 relative ${
-                    isSelected
-                      ? 'bg-slate-900 border-orange-500/80 shadow-lg shadow-orange-500/10 ring-1 ring-orange-500/50'
-                      : 'bg-slate-900/50 border-slate-800 text-slate-400 hover:border-slate-700'
-                  }`}
+                  className="text-xs text-ink-3 hover:text-danger transition-colors"
+                  onClick={() => {
+                    setIdFile(null);
+                    if (fileInputRef.current) fileInputRef.current.value = '';
+                  }}
                 >
-                  <div className={`p-2.5 rounded-xl border ${trade.color}`}>
-                    <Icon className="w-4 h-4" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className={`text-xs font-syne font-bold truncate ${isSelected ? 'text-white' : 'text-slate-300'}`}>
-                      {trade.name}
-                    </p>
-                  </div>
-                  {isSelected && (
-                    <CheckCircle2 className="w-4 h-4 text-orange-400 shrink-0" />
-                  )}
+                  Remove file
                 </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Section 2: Experience */}
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <label className="text-xs font-syne font-bold uppercase tracking-wider text-slate-300">
-              Years of Experience
-            </label>
-            <span className="text-sm font-mono font-bold text-orange-400 bg-orange-500/10 px-2 py-0.5 rounded border border-orange-500/20">
-              {experienceYears} {experienceYears === 1 ? 'Year' : 'Years'}
-            </span>
-          </div>
-          <input
-            type="range"
-            min="1"
-            max="15"
-            value={experienceYears}
-            onChange={(e) => setExperienceYears(parseInt(e.target.value, 10))}
-            className="w-full accent-orange-500 bg-slate-800 h-2 rounded-lg cursor-pointer"
-          />
-        </div>
-
-        {/* Section 3: Identity Verification (KYC) */}
-        <div className="p-4 rounded-2xl bg-slate-900/70 border border-slate-800 space-y-3.5">
-          <div className="flex items-center gap-2 mb-1">
-            <ShieldCheck className="w-4 h-4 text-emerald-400" />
-            <h3 className="text-xs font-syne font-bold text-white uppercase tracking-wider">
-              Government Identity Proof
-            </h3>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-[11px] font-sans text-slate-400 mb-1">ID Type</label>
-              <select
-                value={idType}
-                onChange={(e) => setIdType(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 px-3 text-xs text-slate-200 focus:outline-none focus:border-orange-500/50"
-              >
-                <option value="Aadhaar">Aadhaar Card</option>
-                <option value="Driving License">Driving License</option>
-                <option value="PAN">PAN Card</option>
-                <option value="Voter ID">Voter ID</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-[11px] font-sans text-slate-400 mb-1">ID Number</label>
-              <input
-                type="text"
-                required
-                value={idNumber}
-                onChange={(e) => setIdNumber(e.target.value)}
-                placeholder="XXXX-XXXX-XXXX"
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 px-3 text-xs text-slate-200 focus:outline-none focus:border-orange-500/50 font-mono uppercase"
-              />
+              )}
             </div>
           </div>
-
-          {/* Photo upload */}
-          <div>
-            <label className="block text-[11px] font-sans text-slate-400 mb-1">Upload ID Card Photo</label>
-            <label className="flex items-center justify-center gap-2 p-3 rounded-xl border border-dashed border-slate-700 bg-slate-950 hover:border-orange-500/50 cursor-pointer transition-colors text-xs text-slate-400">
-              <Upload className="w-4 h-4 text-orange-400" />
-              <span>{file ? file.name : 'Choose JPG, PNG or PDF'}</span>
-              <input type="file" accept="image/*,application/pdf" capture="environment" onChange={handleFileUpload} className="hidden" />
-            </label>
-          </div>
         </div>
 
-        {/* Section 4: Bank / UPI Details */}
-        <div className="p-4 rounded-2xl bg-slate-900/70 border border-slate-800 space-y-3">
-          <h3 className="text-xs font-syne font-bold text-white uppercase tracking-wider">
-            Payout Bank / UPI Address
-          </h3>
-          <p className="text-[11px] text-slate-400">
-            Completed service earnings are credited directly to this address.
-          </p>
+        {/* ── Section 4: UPI / Bank ───────────────────────────────── */}
+        <div ref={sectionRefs[3]} className="space-y-3 animate-fade-up stagger-4">
           <div>
-            <input
-              type="text"
+            <p className="text-xs font-mono text-brand uppercase tracking-wider mb-0.5">Section 4</p>
+            <h2 className="text-base font-semibold text-ink">Payment Details</h2>
+            <p className="text-sm text-ink-3">Where your earnings are sent.</p>
+          </div>
+          <div className="bg-card rounded-2xl border border-line p-4">
+            <Input
+              label="UPI ID / Bank Account"
+              icon={<IndianRupee className="w-4 h-4" />}
+              placeholder="yourname@upi"
+              value={upi}
+              onChange={(e) => {
+                setUpi(e.target.value);
+                setUpiErr('');
+              }}
+              onBlur={() => setUpiErr(validateUpi(upi))}
+              error={upiErr}
+              hint="e.g. name@paytm, name@ybl, name@oksbi"
               required
-              value={upiId}
-              onChange={(e) => setUpiId(e.target.value)}
-              placeholder="e.g. yourname@okhdfcbank or 9876543210@paytm"
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 px-3 text-xs text-slate-200 focus:outline-none focus:border-orange-500/50 font-mono"
             />
           </div>
         </div>
 
-        {/* Submit Button */}
-        <button
-          type="submit"
-          disabled={loading || selectedTrades.length === 0}
-          className="w-full py-4 rounded-2xl bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-slate-950 font-syne font-bold text-sm shadow-xl shadow-orange-500/25 active:scale-98 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
-        >
-          {loading ? (
-            <>
-              <Loader2 className="w-4 h-4 animate-spin text-slate-950" />
-              <span>Saving Partner Profile...</span>
-            </>
-          ) : (
-            <>
-              <span>Submit for verification</span>
-              <ArrowRight className="w-4 h-4 text-slate-950" />
-            </>
-          )}
-        </button>
+        {/* ── Submit ──────────────────────────────────────────────── */}
+        <div className="pt-2 pb-4 animate-fade-up stagger-5">
+          <Button
+            type="submit"
+            variant="primary"
+            size="lg"
+            full
+            loading={submitting}
+            icon={<ShieldCheck className="w-5 h-5" />}
+          >
+            Submit for Verification
+          </Button>
+          <p className="text-xs text-ink-4 text-center mt-3">
+            Your data is encrypted and only used for partner verification.
+          </p>
+        </div>
       </form>
     </div>
   );

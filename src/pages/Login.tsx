@@ -1,24 +1,26 @@
-import { useState } from 'react';
+import { useState, FormEvent } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { Wrench, Mail, Lock, AlertCircle, Loader2, ArrowRight } from 'lucide-react';
+import { Wrench, Mail, Lock } from 'lucide-react';
+import { Button, Input, ErrorBanner } from '../components/ui';
 import { supabase } from '../lib/supabase';
 import { useAuthStore } from '../stores/authStore';
 import { triggerHapticImpact } from '../lib/haptics';
+import { ImpactStyle } from '@capacitor/haptics';
 
 export default function Login() {
   const navigate = useNavigate();
-  const { setUser, fetchProfiles } = useAuthStore();
+  const { fetchProfiles } = useAuthStore();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleLogin = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    triggerHapticImpact();
     setError(null);
     setLoading(true);
+    void triggerHapticImpact(ImpactStyle.Light);
 
     try {
       const { data, error: authError } = await supabase.auth.signInWithPassword({
@@ -26,118 +28,98 @@ export default function Login() {
         password,
       });
 
-      if (authError) throw authError;
-
-      if (data.user) {
-        setUser(data.user);
-        await fetchProfiles(data.user.id);
-        navigate('/', { replace: true });
+      if (authError) {
+        setError(authError.message);
+        void triggerHapticImpact(ImpactStyle.Heavy);
+        return;
       }
-    } catch (err: any) {
-      setError(err.message || 'Invalid partner login credentials');
+
+      if (data.session) {
+        await fetchProfiles(data.session.user.id);
+        void triggerHapticImpact(ImpactStyle.Medium);
+        navigate('/');
+      }
+    } catch (err) {
+      setError('Something went wrong. Please try again.');
+      void triggerHapticImpact(ImpactStyle.Heavy);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-between p-6 max-w-lg mx-auto">
-      {/* Top Header */}
-      <div className="pt-safe flex items-center justify-between">
-        <div className="flex items-center gap-2.5">
-          <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-orange-600 to-amber-500 flex items-center justify-center shadow-lg shadow-orange-500/20">
-            <Wrench className="w-5 h-5 text-white" />
-          </div>
-          <div>
-            <h1 className="font-syne font-bold text-lg text-white">HandyMan</h1>
-            <p className="text-[11px] font-mono text-orange-400 font-bold uppercase tracking-wider">Partner Portal</p>
-          </div>
+    <div className="min-h-dvh bg-bg flex flex-col max-w-lg mx-auto">
+      {/* ── Diagonal hero header ── */}
+      <div
+        className="gradient-brand flex flex-col items-center justify-center py-12 px-6 relative overflow-hidden"
+        style={{ clipPath: 'polygon(0 0, 100% 0, 100% 88%, 0 100%)' }}
+      >
+        {/* Subtle noise overlay */}
+        <div className="absolute inset-0 opacity-10 bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzMDAiIGhlaWdodD0iMzAwIj48ZmlsdGVyIGlkPSJub2lzZSI+PGZlVHVyYnVsZW5jZSB0eXBlPSJmcmFjdGFsTm9pc2UiIGJhc2VGcmVxdWVuY3k9IjAuNjUiIG51bU9jdGF2ZXM9IjMiIHN0aXRjaFRpbGVzPSJzdGl0Y2giLz48L2ZpbHRlcj48cmVjdCB3aWR0aD0iMzAwIiBoZWlnaHQ9IjMwMCIgZmlsdGVyPSJ1cmwoI25vaXNlKSIgb3BhY2l0eT0iMSIvPjwvc3ZnPg==')] pointer-events-none" />
+
+        {/* Logo badge */}
+        <div className="w-16 h-16 rounded-2xl bg-white/20 backdrop-blur-sm flex items-center justify-center mb-4 shadow-lg">
+          <Wrench className="w-9 h-9 text-white" strokeWidth={2.5} />
         </div>
+
+        <h1 className="font-display text-3xl font-bold text-white">HandyMan</h1>
+        <p className="text-white/80 text-sm mt-1">Partner Portal</p>
       </div>
 
-      {/* Login Card */}
-      <div className="my-auto py-6">
-        <div className="mb-6">
-          <h2 className="text-2xl font-syne font-bold text-white">Partner Sign In</h2>
-          <p className="text-xs text-slate-400 mt-1">
-            Access your job radar, assigned bookings, and earnings wallet.
-          </p>
+      {/* ── Form area ── */}
+      <div className="flex-1 px-5 py-6 flex flex-col gap-5 pb-nav animate-fade-up">
+        <div>
+          <h2 className="text-xl font-bold text-ink">Welcome back</h2>
+          <p className="text-sm text-ink-3 mt-0.5">Sign in to your partner account</p>
         </div>
 
         {error && (
-          <div className="mb-4 p-3 rounded-2xl bg-rose-950/60 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
-            <span>{error}</span>
-          </div>
+          <ErrorBanner message={error} onRetry={() => setError(null)} />
         )}
 
-        <form onSubmit={handleLogin} className="space-y-4">
-          <div>
-            <label className="block text-xs font-syne font-semibold text-slate-300 mb-1.5">
-              Registered Email
-            </label>
-            <div className="relative">
-              <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-              <input
-                type="email"
-                autoComplete="username"
-                inputMode="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="technician@houserve.com"
-                className="w-full bg-slate-900 border border-slate-800 rounded-2xl py-3 pl-10 pr-4 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-orange-500/60 transition-all font-mono"
-              />
-            </div>
-          </div>
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4" noValidate>
+          <Input
+            label="Email"
+            type="email"
+            autoComplete="username"
+            inputMode="email"
+            required
+            icon={<Mail className="w-4 h-4" />}
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
 
-          <div>
-            <label className="block text-xs font-syne font-semibold text-slate-300 mb-1.5">
-              Password
-            </label>
-            <div className="relative">
-              <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-              <input
-                type="password"
-                autoComplete="current-password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                className="w-full bg-slate-900 border border-slate-800 rounded-2xl py-3 pl-10 pr-4 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-orange-500/60 transition-all font-mono"
-              />
-            </div>
-          </div>
+          <Input
+            label="Password"
+            type="password"
+            autoComplete="current-password"
+            required
+            icon={<Lock className="w-4 h-4" />}
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full mt-2 py-4 rounded-2xl bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-slate-950 font-syne font-bold text-sm shadow-xl shadow-orange-500/25 active:scale-98 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
-          >
-            {loading ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin text-slate-950" />
-                <span>Authenticating Partner...</span>
-              </>
-            ) : (
-              <>
-                <span>Sign In to Dashboard</span>
-                <ArrowRight className="w-4 h-4 text-slate-950" />
-              </>
-            )}
-          </button>
+          <div className="pt-2">
+            <Button
+              type="submit"
+              variant="primary"
+              size="lg"
+              full
+              loading={loading}
+            >
+              Sign In
+            </Button>
+          </div>
         </form>
-      </div>
 
-      {/* Footer / Switch to Signup */}
-      <div className="pt-4 border-t border-slate-800/80 text-center pb-safe">
-        <p className="text-xs text-slate-400">
-          Want to become a service partner?{' '}
-          <Link to="/signup" className="text-orange-400 font-syne font-bold hover:underline">
-            Register as Technician
+        <p className="text-center text-sm text-ink-3 pt-2">
+          New partner?{' '}
+          <Link to="/signup" className="text-brand font-medium hover:underline">
+            Register here
           </Link>
         </p>
       </div>
     </div>
   );
 }
+

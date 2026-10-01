@@ -1,230 +1,241 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { 
-  User, Phone, Mail, Wrench, ShieldCheck, Star, 
-  MapPin, LogOut, CheckCircle2, Loader2, Sparkles 
-} from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import { useEffect, useState, useCallback } from 'react';
+import { Star, LogOut, CheckCircle2, CreditCard, MapPin } from 'lucide-react';
+import {
+  Button, Card, Badge, Chip, SectionHeader, ErrorBanner,
+} from '../components/ui';
 import { useAuthStore } from '../stores/authStore';
-import { triggerHapticImpact } from '../lib/haptics';
+import { supabase } from '../lib/supabase';
 
+// ── All 7 supported trades ─────────────────────────────────────
 const ALL_TRADES = [
-  'Electrical',
+  'Electrician',
+  'Plumber',
+  'Carpenter',
+  'Painter',
+  'AC Technician',
   'Appliance Repair',
-  'Plumbing',
-  'Carpentry',
-  'Painting',
   'Cleaning',
-  'Pest Control'
-];
+] as const;
 
 export default function Profile() {
-  const navigate = useNavigate();
-  const { user, profile, technicianProfile, signOut, fetchProfiles } = useAuthStore();
+  const { profile, technicianProfile, fetchProfiles, user, signOut } = useAuthStore();
 
-  const [skills, setSkills] = useState<string[]>(technicianProfile?.skills || ['Electrical']);
-  const [radius, setRadius] = useState<number>(technicianProfile?.service_radius_km || 15);
-  const [saving, setSaving] = useState(false);
+  // local editable state
+  const [skills, setSkills]   = useState<string[]>(technicianProfile?.skills ?? []);
+  const [radius, setRadius]   = useState<number>(technicianProfile?.service_radius_km ?? 10);
+  const [saving, setSaving]   = useState(false);
+  const [saveError, setSaveError]   = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
-  const toggleSkill = (trade: string) => {
-    triggerHapticImpact();
-    setSkills((prev) => 
-      prev.includes(trade)
-        ? (prev.length > 1 ? prev.filter(t => t !== trade) : prev)
-        : [...prev, trade]
-    );
-  };
-
-  const handleSavePreferences = async () => {
-    if (!user) return;
-    triggerHapticImpact();
-    setSaving(true);
-    setSaveSuccess(false);
-
-    try {
-      const { error } = await supabase
-        .from('technician_profiles')
-        .update({
-          skills,
-          service_radius_km: radius,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', user.id);
-
-      if (error) throw error;
-      await fetchProfiles(user.id);
-      setSaveSuccess(true);
-      setTimeout(() => setSaveSuccess(false), 2500);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setSaving(false);
+  // sync when store loads
+  useEffect(() => {
+    if (technicianProfile) {
+      setSkills(technicianProfile.skills ?? []);
+      setRadius(technicianProfile.service_radius_km ?? 10);
     }
-  };
+  }, [technicianProfile]);
 
-  const handleSignOut = async () => {
-    triggerHapticImpact();
-    await signOut();
-    navigate('/login', { replace: true });
-  };
+  const toggleTrade = useCallback((trade: string) => {
+    setSkills(prev => {
+      if (prev.includes(trade)) {
+        if (prev.length <= 1) return prev; // keep at least 1
+        return prev.filter(s => s !== trade);
+      }
+      return [...prev, trade];
+    });
+    setSaveSuccess(false);
+  }, []);
+
+  // ── save changes ──────────────────────────────────────────────
+  async function handleSave() {
+    if (!user) return;
+    setSaving(true);
+    setSaveError(null);
+    setSaveSuccess(false);
+    const { error } = await supabase
+      .from('technician_profiles')
+      .update({ skills, service_radius_km: radius, updated_at: new Date().toISOString() })
+      .eq('id', user.id);
+    if (error) {
+      setSaveError(error.message || 'Could not save changes. Please try again.');
+    } else {
+      setSaveSuccess(true);
+      await fetchProfiles(user.id);
+    }
+    setSaving(false);
+  }
+
+  // ── derived display values ────────────────────────────────────
+  const name     = profile?.full_name ?? 'Partner';
+  const email    = profile?.email ?? '';
+  const phone    = profile?.phone ?? '';
+  const initial  = name.charAt(0).toUpperCase();
+  const rating   = technicianProfile?.rating ?? 0;
+  const jobsDone = technicianProfile?.total_completed_jobs ?? 0;
+  const expYears = technicianProfile?.experience_years ?? 0;
+  const verified = technicianProfile?.verification_status === 'approved';
+  const upiId    = technicianProfile?.bank_upi_id;
+  const bankName = technicianProfile?.bank_account_name;
 
   return (
-    <div className="p-4 space-y-4 max-w-lg mx-auto pb-safe">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-syne font-bold text-white">Partner Profile</h1>
-          <p className="text-xs text-slate-400">Credentials, active trades, and radius</p>
+    <div className="pb-nav space-y-0">
+
+      {/* ── Profile Hero ─────────────────────────────────────────── */}
+      <div className="gradient-brand relative overflow-hidden">
+        {/* decorative depth circles */}
+        <div className="absolute -top-12 -right-12 w-56 h-56 bg-white/5 rounded-full pointer-events-none" />
+        <div className="absolute top-20 -right-4 w-32 h-32 bg-white/5 rounded-full pointer-events-none" />
+        <div className="absolute -bottom-8 -left-8 w-40 h-40 bg-white/5 rounded-full pointer-events-none" />
+
+        <div className="relative pt-safe px-5 pt-8 pb-14">
+          <div className="flex items-center gap-4">
+            {/* avatar */}
+            <div className="w-20 h-20 rounded-2xl gradient-brand border-2 border-white/30 flex items-center justify-center font-display text-3xl font-bold text-white shadow-xl bg-white/10 shrink-0">
+              {initial}
+            </div>
+
+            {/* info */}
+            <div className="min-w-0">
+              <h1 className="text-xl font-bold text-white truncate">{name}</h1>
+              {email && <p className="text-sm text-white/70 mt-0.5 truncate">{email}</p>}
+              {phone && <p className="text-sm text-white/70 truncate">{phone}</p>}
+              <div className="mt-2">
+                {verified
+                  ? (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-money-soft text-money border border-money/20">
+                      <CheckCircle2 className="w-3 h-3" aria-hidden /> Verified
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-warn-soft text-warn border border-warn/20">
+                      Pending KYC
+                    </span>
+                  )
+                }
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* Profile Info Header */}
-      <div className="p-5 rounded-3xl bg-slate-900 border border-slate-800 flex items-center gap-4">
-        <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-orange-600 to-amber-500 flex items-center justify-center font-syne font-bold text-2xl text-white shadow-lg shadow-orange-500/20 shrink-0">
-          {profile?.full_name?.charAt(0) || 'P'}
-        </div>
-        <div className="overflow-hidden">
-          <div className="flex items-center gap-2">
-            <h2 className="font-syne font-bold text-lg text-white truncate">
-              {profile?.full_name || 'Service Partner'}
-            </h2>
-            {technicianProfile?.verification_status === 'approved' ? (
-              <span className="text-xs font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded">Verified</span>
-            ) : (
-              <span className="text-xs font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20 px-2 py-0.5 rounded capitalize">
-                {technicianProfile?.verification_status ?? 'Pending'}
+      {/* ── Stats row (floats over hero bottom) ─────────────────── */}
+      <div className="grid grid-cols-3 gap-3 px-4 -mt-6 animate-fade-up">
+        {[
+          { label: 'Jobs Done', value: jobsDone, icon: null },
+          {
+            label: 'Rating',
+            value: (
+              <span className="flex items-center gap-1">
+                <Star className="w-4 h-4 text-warn fill-warn" aria-hidden />
+                {rating > 0 ? rating.toFixed(1) : '—'}
               </span>
-            )}
-          </div>
-          <p className="text-xs text-slate-400 flex items-center gap-1.5 mt-0.5 font-mono">
-            <Mail className="w-3.5 h-3.5 text-slate-500" />
-            <span className="truncate">{profile?.email}</span>
-          </p>
-          {profile?.phone && (
-            <p className="text-xs text-slate-400 flex items-center gap-1.5 mt-0.5 font-mono">
-              <Phone className="w-3.5 h-3.5 text-slate-500" />
-              <span>{profile.phone}</span>
+            ),
+            icon: null,
+          },
+          { label: 'Exp. (yrs)', value: expYears > 0 ? expYears : '—', icon: null },
+        ].map(stat => (
+          <div
+            key={stat.label}
+            className="rounded-2xl bg-card border border-line p-3 text-center shadow-sm"
+          >
+            <p className="text-lg font-bold text-ink flex items-center justify-center">
+              {stat.value}
             </p>
-          )}
-        </div>
-      </div>
-
-      {/* Metrics Row */}
-      <div className="grid grid-cols-3 gap-2.5">
-        <div className="p-3 rounded-2xl bg-slate-900 border border-slate-800 text-center">
-          <p className="text-[10px] font-syne text-slate-400 uppercase">Jobs Done</p>
-          <p className="text-base font-mono font-bold text-white mt-0.5">
-            {technicianProfile?.total_completed_jobs || 0}
-          </p>
-        </div>
-        <div className="p-3 rounded-2xl bg-slate-900 border border-slate-800 text-center">
-          <p className="text-[10px] font-syne text-slate-400 uppercase">Rating</p>
-          <div className="flex items-center justify-center gap-1 mt-0.5">
-            <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
-            <span className="text-base font-mono font-bold text-white">
-              {technicianProfile?.rating?.toFixed(1) || '5.0'}
-            </span>
+            <p className="text-xs text-ink-3 mt-0.5">{stat.label}</p>
           </div>
-        </div>
-        <div className="p-3 rounded-2xl bg-slate-900 border border-slate-800 text-center">
-          <p className="text-[10px] font-syne text-slate-400 uppercase">Experience</p>
-          <p className="text-base font-mono font-bold text-orange-400 mt-0.5">
-            {technicianProfile?.experience_years || 1} Yrs
-          </p>
-        </div>
+        ))}
       </div>
 
-      {/* Trade Skills Configuration */}
-      <div className="p-5 rounded-3xl bg-slate-900 border border-slate-800 space-y-3.5">
-        <div className="flex items-center justify-between">
-          <h3 className="text-xs font-syne font-bold uppercase tracking-wider text-white">
-            Active Service Trades
-          </h3>
-          <span className="text-[11px] font-mono text-orange-400">
-            {skills.length} Selected
-          </span>
-        </div>
-        <p className="text-[11px] text-slate-400">
-          Toggle trades to start or stop receiving matching booking offers.
-        </p>
+      {/* ── Content sections ─────────────────────────────────────── */}
+      <div className="p-4 space-y-4 animate-fade-up stagger-1">
 
-        <div className="flex flex-wrap gap-2 pt-1">
-          {ALL_TRADES.map((trade) => {
-            const isSelected = skills.includes(trade);
-            return (
-              <button
+        {saveError && <ErrorBanner message={saveError} />}
+
+        {/* Active Trades */}
+        <Card className="p-4 space-y-3">
+          <SectionHeader
+            title="Active Trades"
+            action={
+              <Badge tone="brand">{skills.length} selected</Badge>
+            }
+          />
+          <div className="flex flex-wrap gap-2">
+            {ALL_TRADES.map(trade => (
+              <Chip
                 key={trade}
-                type="button"
-                onClick={() => toggleSkill(trade)}
-                className={`px-3 py-2 rounded-xl text-xs font-syne font-bold transition-all border ${
-                  isSelected
-                    ? 'bg-orange-500/15 text-orange-400 border-orange-500/50 shadow-sm'
-                    : 'bg-slate-950 text-slate-400 border-slate-800 hover:border-slate-700'
-                }`}
-              >
-                {isSelected ? `✓ ${trade}` : `+ ${trade}`}
-              </button>
-            );
-          })}
-        </div>
+                label={trade}
+                selected={skills.includes(trade)}
+                onClick={() => toggleTrade(trade)}
+              />
+            ))}
+          </div>
+          <p className="text-xs text-ink-3">At least 1 trade must remain selected.</p>
+        </Card>
 
-        {/* Operating Radius */}
-        <div className="pt-3 border-t border-slate-800 space-y-2">
-          <div className="flex items-center justify-between text-xs">
-            <span className="font-syne font-bold text-slate-300">Dispatch Radius</span>
-            <span className="font-mono font-bold text-orange-400">{radius} km</span>
+        {/* Service Radius */}
+        <Card className="p-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <MapPin className="w-4 h-4 text-ink-3 shrink-0" aria-hidden />
+            <span className="text-sm font-semibold text-ink flex-1">Dispatch Radius</span>
+            <Badge tone="brand" className="font-mono">{radius} km</Badge>
           </div>
           <input
             type="range"
-            min="5"
-            max="30"
-            step="1"
+            min={5}
+            max={30}
+            step={1}
             value={radius}
-            onChange={(e) => setRadius(parseInt(e.target.value, 10))}
-            className="w-full accent-orange-500 bg-slate-800 h-2 rounded-lg cursor-pointer"
+            onChange={e => { setRadius(Number(e.target.value)); setSaveSuccess(false); }}
+            className="w-full accent-brand h-2 rounded-full cursor-pointer"
+            aria-label="Service radius in km"
           />
-        </div>
+          <div className="flex justify-between text-xs text-ink-4">
+            <span>5 km</span>
+            <span>30 km</span>
+          </div>
+        </Card>
 
-        {/* Save button */}
-        <button
-          onClick={handleSavePreferences}
-          disabled={saving}
-          className="w-full mt-2 py-3 rounded-2xl bg-slate-800 hover:bg-slate-750 text-white font-syne font-bold text-xs border border-slate-700 active:scale-98 transition-all flex items-center justify-center gap-1.5"
+        {/* Save Button */}
+        <Button
+          variant="secondary"
+          full
+          loading={saving}
+          onClick={handleSave}
+          icon={saveSuccess ? <CheckCircle2 className="w-4 h-4 text-money" /> : undefined}
         >
-          {saving ? (
-            <Loader2 className="w-4 h-4 animate-spin text-orange-400" />
-          ) : saveSuccess ? (
-            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-          ) : (
-            <Wrench className="w-4 h-4 text-orange-400" />
-          )}
-          <span>{saveSuccess ? 'Saved Preferences!' : 'Update Trade Preferences'}</span>
-        </button>
-      </div>
+          {saveSuccess ? 'Saved!' : 'Save Changes'}
+        </Button>
 
-      {/* Linked Bank / UPI Display */}
-      <div className="p-4 rounded-3xl bg-slate-900 border border-slate-800 flex items-center justify-between">
-        <div>
-          <span className="text-[10px] font-syne font-bold uppercase text-slate-400 tracking-wider">
-            Linked Settlement Account
-          </span>
-          <p className="font-mono text-xs font-bold text-white mt-0.5">
-            {technicianProfile?.bank_upi_id || 'Not configured'}
-          </p>
-        </div>
-        <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-1 rounded-lg">
-          Active
-        </span>
-      </div>
+        {/* Linked Payout */}
+        <Card className="p-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-money-soft flex items-center justify-center shrink-0">
+              <CreditCard className="w-5 h-5 text-money" aria-hidden />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-ink">
+                {upiId ? 'UPI Account' : bankName ? 'Bank Account' : 'No payout linked'}
+              </p>
+              <p className="text-xs text-ink-3 truncate font-mono mt-0.5">
+                {upiId ?? technicianProfile?.bank_account_number ?? 'Add in KYC settings'}
+              </p>
+            </div>
+            {(upiId || technicianProfile?.bank_account_number) && (
+              <Badge tone="money" dot>Active</Badge>
+            )}
+          </div>
+        </Card>
 
-      {/* Sign Out Button */}
-      <button
-        onClick={handleSignOut}
-        className="w-full py-4 rounded-2xl bg-rose-950/30 hover:bg-rose-950/50 text-rose-400 font-syne font-bold text-xs border border-rose-500/20 active:scale-98 transition-all flex items-center justify-center gap-2"
-      >
-        <LogOut className="w-4 h-4" />
-        <span>Go Offline & Sign Out</span>
-      </button>
+        {/* Sign Out */}
+        <Button
+          variant="ghost"
+          full
+          icon={<LogOut className="w-4 h-4" />}
+          className="text-danger hover:text-danger hover:bg-danger-soft border border-danger/20 mt-2"
+          onClick={signOut}
+        >
+          Sign Out
+        </Button>
+      </div>
     </div>
   );
 }

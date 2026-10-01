@@ -1,589 +1,632 @@
-import { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { 
-  ArrowLeft, Phone, MessageSquare, Navigation, MapPin, Calendar, 
-  Clock, ShieldCheck, CheckCircle2, Camera, Upload, AlertCircle, 
-  Loader2, Copy 
-} from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import confetti from 'canvas-confetti';
-import { supabase } from '../lib/supabase';
+import {
+  ArrowLeft, Navigation, Phone, MessageCircle, Copy, Check, Camera,
+  CalendarDays, MapPin, ShieldCheck, CheckCircle2, Wallet,
+} from 'lucide-react';
+import {
+  Badge, Button, Card, ErrorBanner, ModalBackdrop, MoneyDisplay,
+  ProgressSteps, StatusBadge, Textarea,
+} from '../components/ui';
 import { useAuthStore } from '../stores/authStore';
 import { useRadarStore } from '../stores/radarStore';
-import { triggerHapticImpact, triggerHapticNotification } from '../lib/haptics';
+import { supabase } from '../lib/supabase';
 import { playSuccessChime } from '../lib/audio';
-import { addressLine, formatDay, formatMoney, payoutFor, whatsappNumber } from '../lib/format';
+import { triggerHapticNotification } from '../lib/haptics';
+import { formatDay, addressLine, whatsappNumber, payoutFor } from '../lib/format';
 import type { Booking } from '../types';
 
+// ── Helpers ──────────────────────────────────────────────────────────────────
+const STEPS = ['Accepted', 'On Way', 'In Work', 'Done'] as const;
+
+function stepIndex(status: Booking['status']): number {
+  switch (status) {
+    case 'accepted':    return 0;
+    case 'on_the_way':  return 1;
+    case 'in_progress': return 2;
+    case 'completed':   return 3;
+    default:            return 0;
+  }
+}
+
+// ── OTP Modal ────────────────────────────────────────────────────────────────
+function OtpModal({
+  onClose, onVerify, loading,
+}: {
+  onClose: () => void;
+  onVerify: (otp: string) => Promise<void>;
+  loading: boolean;
+}) {
+  const [otp, setOtp] = useState('');
+  return (
+    <ModalBackdrop onClose={onClose}>
+      <div className="bg-card rounded-2xl p-5 space-y-4">
+        {/* Icon + title */}
+        <div className="flex flex-col items-center gap-2 pt-1">
+          <div className="w-12 h-12 rounded-2xl bg-brand-soft border border-brand/20
+                          flex items-center justify-center">
+            <ShieldCheck className="w-6 h-6 text-brand" />
+          </div>
+          <h3 className="text-base font-bold text-ink text-center">Enter Start OTP</h3>
+          <p className="text-sm text-ink-3 text-center max-w-xs">
+            Ask the customer for their 4-digit OTP to confirm you've arrived.
+          </p>
+        </div>
+
+        {/* OTP input */}
+        <input
+          type="number"
+          inputMode="numeric"
+          maxLength={6}
+          placeholder="- - - -"
+          value={otp}
+          onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+          className="w-full text-3xl font-mono text-center tracking-widest py-4
+                     bg-card-2 border border-line rounded-xl
+                     focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/15
+                     text-ink placeholder:text-ink-4 transition-all"
+        />
+
+        {/* Buttons */}
+        <div className="flex gap-2.5">
+          <Button variant="secondary" full onClick={onClose} disabled={loading}>
+            Cancel
+          </Button>
+          <Button
+            variant="success"
+            full
+            loading={loading}
+            disabled={otp.length < 4}
+            onClick={() => onVerify(otp)}
+          >
+            Verify
+          </Button>
+        </div>
+      </div>
+    </ModalBackdrop>
+  );
+}
+
+// ── JobDetail ────────────────────────────────────────────────────────────────
 export default function JobDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { user } = useAuthStore();
-  const fetchMyJobs = useRadarStore((s) => s.fetchMyJobs);
-  const [confirmComplete, setConfirmComplete] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const { fetchMyJobs } = useRadarStore();
 
   const [booking, setBooking] = useState<Booking | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [actionLoading, setActionLoading] = useState(false);
-  const [otpModalOpen, setOtpModalOpen] = useState(false);
-  const [otpInput, setOtpInput] = useState('');
-  const [otpError, setOtpError] = useState<string | null>(null);
-
-  // Proof uploads
-  const [proofBeforeFile, setProofBeforeFile] = useState<File | null>(null);
-  const [proofAfterFile, setProofAfterFile] = useState<File | null>(null);
-  const [technicianNotes, setTechnicianNotes] = useState('');
+  const [loadingBooking, setLoadingBooking] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!id) return;
-    fetchBookingData(id);
+  // Action states
+  const [actionLoading, setActionLoading] = useState(false);
+  const [otpModalOpen, setOtpModalOpen] = useState(false);
+  const [otpLoading, setOtpLoading] = useState(false);
 
-    // Realtime changes on this booking
+  // Completion flow
+  const [proofAfterFile, setProofAfterFile] = useState<File | null>(null);
+  const [techNotes, setTechNotes] = useState('');
+  const [showConfirmComplete, setShowConfirmComplete] = useState(false);
+  const [completing, setCompleting] = useState(false);
+
+  // Address copy feedback
+  const [copied, setCopied] = useState(false);
+  const copyTimerRef = useRef<number | null>(null);
+
+  // ── Fetch booking ──────────────────────────────────────────────────────────
+  const fetchBooking = useCallback(async (silent = false) => {
+    if (!id) return;
+    if (!silent) setLoadingBooking(true);
+    const { data, error } = await supabase
+      .from('bookings')
+      .select('*, services(name, category, image_url), booking_items(id, quantity, unit_price, total_price, services(name, image_url))')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (error) {
+      setErrorMsg('Could not load job details. Please try again.');
+    } else if (data) {
+      setBooking(data as unknown as Booking);
+    }
+    setLoadingBooking(false);
+  }, [id]);
+
+  useEffect(() => {
+    void fetchBooking();
+
+    // Real-time listener for this booking — silent refresh on UPDATE
     const channel = supabase
-      .channel(`job-detail-${id}`)
-      .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'bookings', filter: `id=eq.${id}` },
-        () => {
-          fetchBookingData(id, true);
-        }
+      .channel(`booking-detail-${id}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'bookings', filter: `id=eq.${id}` },
+        () => void fetchBooking(true),
       )
       .subscribe();
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [id]);
+    return () => { supabase.removeChannel(channel); };
+  }, [fetchBooking, id]);
 
-  const fetchBookingData = async (bookingId: string, silent = false) => {
-    try {
-      if (!silent) setLoading(true);
-      const { data, error } = await supabase
-        .from('bookings')
-        .select(`
-          *,
-          services ( name, category, image_url ),
-          booking_items (
-            id,
-            quantity,
-            unit_price,
-            total_price,
-            services ( name, image_url )
-          )
-        `)
-        .eq('id', bookingId)
-        .single();
-
-      if (!error && data) {
-        setBooking(data as unknown as Booking);
-      }
-    } catch (err) {
-      console.error('Failed to load booking:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleUpdateStatus = async (nextStatus: 'on_the_way' | 'in_progress') => {
+  // ── Action handlers ────────────────────────────────────────────────────────
+  const handleStartTravel = async () => {
     if (!booking) return;
-    triggerHapticImpact();
     setActionLoading(true);
     setErrorMsg(null);
-
-    try {
-      const { data, error } = await supabase.rpc('start_travel', { p_booking_id: booking.id });
-      if (error) throw error;
-      const res = data as { success: boolean; message: string };
-      if (!res.success) throw new Error(res.message);
-      setBooking({ ...booking, status: nextStatus });
-      if (user) void fetchMyJobs(user.id);
-    } catch (e: any) {
-      setErrorMsg(e.message || 'Failed to update status');
-    } finally {
-      setActionLoading(false);
+    const { error } = await supabase.rpc('start_travel', { p_booking_id: booking.id });
+    if (error) {
+      setErrorMsg(error.message || 'Could not update status. Please try again.');
+    } else {
+      void fetchBooking(true);
+      if (user?.id) void fetchMyJobs(user.id);
     }
+    setActionLoading(false);
   };
 
-  const handleVerifyOtp = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!booking || !user) return;
-    triggerHapticImpact();
-    setOtpError(null);
-    setActionLoading(true);
-
-    try {
-      const { data, error } = await supabase.rpc('verify_start_otp', {
-        p_booking_id: booking.id,
-        p_otp: otpInput.trim()
-      });
-
-      if (error) throw error;
-
-      const res = data as { success: boolean; message: string };
-      if (res.success) {
-        triggerHapticNotification();
-        setOtpModalOpen(false);
-        setOtpInput('');
-        setBooking({ ...booking, status: 'in_progress' });
-        void fetchMyJobs(user.id);
-      } else {
-        setOtpError(res.message);
-      }
-    } catch (err: any) {
-      setOtpError(err.message || 'Verification failed. Try again.');
-    } finally {
-      setActionLoading(false);
+  const handleVerifyOtp = async (otp: string) => {
+    if (!booking) return;
+    setOtpLoading(true);
+    setErrorMsg(null);
+    const { error } = await supabase.rpc('verify_start_otp', {
+      p_booking_id: booking.id,
+      p_otp: otp,
+    });
+    if (error) {
+      setErrorMsg(error.message || 'Invalid OTP. Please check with the customer.');
+    } else {
+      setOtpModalOpen(false);
+      void fetchBooking(true);
+      if (user?.id) void fetchMyJobs(user.id);
     }
+    setOtpLoading(false);
   };
 
   const handleCompleteJob = async () => {
-    if (!booking || !user) return;
-    triggerHapticImpact();
-    setActionLoading(true);
+    if (!booking) return;
+    setCompleting(true);
     setErrorMsg(null);
 
-    try {
-      let afterUrl: string | undefined = undefined;
+    let proofUrl: string | null = null;
 
-      // Upload completion proof if attached
-      if (proofAfterFile) {
-        const fileExt = proofAfterFile.name.split('.').pop();
-        const filePath = `${booking.id}/after_${Date.now()}.${fileExt}`;
-        const { error: uploadError } = await supabase.storage
-          .from('job-proofs')
-          .upload(filePath, proofAfterFile);
+    // Upload proof photo if selected
+    if (proofAfterFile && user?.id) {
+      const ext = proofAfterFile.name.split('.').pop() ?? 'jpg';
+      const path = `${user.id}/${booking.id}/after.${ext}`;
+      const { error: uploadError } = await supabase.storage
+        .from('job-proofs')
+        .upload(path, proofAfterFile, { upsert: true });
 
-        if (uploadError) {
-          setErrorMsg('Photo upload failed. Check your connection and try again, or remove the photo.');
-          setActionLoading(false);
-          return;
-        }
-        const { data: publicUrlData } = supabase.storage
-          .from('job-proofs')
-          .getPublicUrl(filePath);
-        afterUrl = publicUrlData.publicUrl;
+      if (uploadError) {
+        setErrorMsg('Photo upload failed. Please try again.');
+        setCompleting(false);
+        return;
       }
-
-      // Call completion RPC
-      const { data, error } = await supabase.rpc('complete_booking_service', {
-        p_booking_id: booking.id,
-        p_proof_after_url: afterUrl,
-        p_notes: technicianNotes.trim() || undefined
-      });
-
-      if (error) throw error;
-
-      const res = data as { success: boolean; message: string; credited_amount: number };
-      if (!res.success) throw new Error(res.message);
-      if (res.success) {
-        confetti({
-          particleCount: 100,
-          spread: 70,
-          origin: { y: 0.6 }
-        });
-        playSuccessChime();
-        triggerHapticNotification();
-        setBooking({ ...booking, status: 'completed' });
-        setConfirmComplete(false);
-        void fetchMyJobs(user.id);
-      }
-    } catch (e: any) {
-      setErrorMsg(e.message || 'Failed to complete booking');
-    } finally {
-      setActionLoading(false);
+      const { data: urlData } = supabase.storage.from('job-proofs').getPublicUrl(path);
+      proofUrl = urlData.publicUrl;
     }
+
+    const { error } = await supabase.rpc('complete_booking_service', {
+      p_booking_id: booking.id,
+      p_proof_after_url: proofUrl,
+      p_technician_notes: techNotes || null,
+    });
+
+    if (error) {
+      setErrorMsg(error.message || 'Could not complete the job. Please try again.');
+      setCompleting(false);
+      return;
+    }
+
+    // Celebration 🎉
+    void confetti({ particleCount: 120, spread: 80, origin: { y: 0.6 } });
+    playSuccessChime();
+    void triggerHapticNotification();
+
+    void fetchBooking(true);
+    if (user?.id) void fetchMyJobs(user.id);
+    setShowConfirmComplete(false);
+    setCompleting(false);
   };
 
-  if (loading) {
+  // ── Copy address ──────────────────────────────────────────────────────────
+  const handleCopyAddress = () => {
+    const addr = addressLine(booking?.address_snapshot);
+    if (!addr) return;
+    navigator.clipboard.writeText(addr).catch(() => {});
+    setCopied(true);
+    if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    copyTimerRef.current = window.setTimeout(() => setCopied(false), 2000);
+  };
+
+  useEffect(() => () => {
+    if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+  }, []);
+
+  // ── Derived values ────────────────────────────────────────────────────────
+  const snap = booking?.address_snapshot;
+  const phone = snap?.phone ?? null;
+  const fullAddr = addressLine(snap);
+  const lat = snap?.latitude;
+  const lng = snap?.longitude;
+  const mapsUrl = lat && lng
+    ? `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`
+    : `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(fullAddr)}`;
+
+  const payout = booking ? payoutFor(booking) : 0;
+
+  // ── Loading / error skeleton ───────────────────────────────────────────────
+  if (loadingBooking) {
     return (
-      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-6">
-        <Loader2 className="w-10 h-10 animate-spin text-orange-500 mb-3" />
-        <p className="text-xs font-syne text-slate-400">Loading Job Cockpit...</p>
+      <div className="p-4 space-y-4 max-w-lg mx-auto pb-safe animate-fade-up">
+        <div className="flex items-center justify-between">
+          <div className="skeleton h-9 w-9 rounded-xl" />
+          <div className="skeleton h-6 w-28 rounded-full" />
+          <div className="skeleton h-6 w-20 rounded-full" />
+        </div>
+        <div className="skeleton h-10 w-full rounded-xl" />
+        <div className="skeleton h-40 w-full rounded-2xl" />
+        <div className="skeleton h-32 w-full rounded-2xl" />
       </div>
     );
   }
 
   if (!booking) {
     return (
-      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-6 text-center">
-        <AlertCircle className="w-12 h-12 text-slate-500 mb-3" />
-        <h2 className="text-lg font-syne font-bold text-white mb-2">Job Not Found</h2>
-        <button
-          onClick={() => navigate('/')}
-          className="px-5 py-2.5 rounded-xl bg-orange-500 text-slate-950 font-syne font-bold text-xs"
-        >
-          Return to Radar
-        </button>
+      <div className="p-4 max-w-lg mx-auto pb-safe">
+        <ErrorBanner
+          message={errorMsg ?? 'Job not found.'}
+          onRetry={() => void fetchBooking()}
+        />
       </div>
     );
   }
 
-  const address = booking.address_snapshot;
-  const customerPhone = address?.phone || '';
-  const customerAddressText = addressLine(address) || 'Address not available';
-  const payout = payoutFor(booking);
-
-  // Turn-by-turn Google Maps URL
-  const mapsUrl = address?.latitude && address?.longitude
-    ? `https://www.google.com/maps/dir/?api=1&destination=${address.latitude},${address.longitude}`
-    : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(customerAddressText)}`;
-
+  const currentStep = stepIndex(booking.status);
   const isCompleted = booking.status === 'completed';
-
-  const copyAddress = async () => {
-    try {
-      await navigator.clipboard.writeText(customerAddressText);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 2000);
-    } catch { /* clipboard unavailable */ }
-  };
+  const isCancelled = booking.status === 'cancelled';
 
   return (
-    <div className="p-4 space-y-4 max-w-lg mx-auto pb-safe">
-      {/* 1. Header Bar */}
-      <div className="flex items-center justify-between">
-        <button
-          onClick={() => navigate('/')}
-          className="p-2 -ml-2 rounded-xl text-slate-400 hover:text-white active:scale-95"
-        >
-          <ArrowLeft className="w-5 h-5" />
-        </button>
-        <span className="font-mono text-xs font-bold text-orange-400 bg-orange-500/10 px-2.5 py-1 rounded-lg border border-orange-500/20">
-          {booking.booking_ref}
-        </span>
-      </div>
+    <>
+      <div className="p-4 space-y-4 max-w-lg mx-auto pb-safe">
 
-      {/* 2. Status Stepper */}
-      <div className="p-4 rounded-3xl bg-slate-900 border border-slate-800 space-y-3">
-        <div className="flex items-center justify-between text-xs">
-          <span className="font-syne font-bold text-slate-400 uppercase tracking-wider">
-            Job Lifecycle
-          </span>
-          <span className={`font-syne font-bold px-2.5 py-0.5 rounded-full text-[11px] uppercase ${
-            isCompleted 
-              ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-              : 'bg-orange-500/20 text-orange-400 border border-orange-500/30 animate-pulse'
-          }`}>
-            {booking.status.replace('_', ' ')}
-          </span>
-        </div>
-
-        {/* Visual Progress Steps */}
-        <div className="grid grid-cols-4 gap-1.5 pt-1">
-          {[
-            { key: 'accepted', label: 'Accepted' },
-            { key: 'on_the_way', label: 'On Way' },
-            { key: 'in_progress', label: 'In Work' },
-            { key: 'completed', label: 'Done' }
-          ].map((step, index) => {
-            const stepOrder = ['accepted', 'on_the_way', 'in_progress', 'completed'];
-            const currentIndex = stepOrder.indexOf(booking.status);
-            const isDone = currentIndex >= index;
-            const isCurrent = currentIndex === index;
-
-            return (
-              <div key={step.key} className="flex flex-col items-center">
-                <div className={`w-full h-1.5 rounded-full mb-1.5 transition-colors ${
-                  isDone ? 'bg-orange-500 shadow-sm shadow-orange-500/50' : 'bg-slate-800'
-                }`} />
-                <span className={`text-[10px] font-syne ${isCurrent ? 'text-orange-400 font-bold' : isDone ? 'text-slate-300' : 'text-slate-600'}`}>
-                  {step.label}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* 3. Customer Address & Navigation Card */}
-      <div className="p-4 rounded-3xl bg-slate-900 border border-slate-800 space-y-3.5">
-        <div className="flex items-start justify-between">
-          <div className="space-y-1">
-            <span className="text-[10px] font-syne font-bold uppercase tracking-wider text-slate-400">
-              Customer Destination
-            </span>
-            <p className="text-sm font-semibold text-white leading-snug">
-              {customerAddressText}
-            </p>
-            <button onClick={copyAddress} className="inline-flex items-center gap-1.5 text-sm font-semibold text-brand min-h-11" aria-label="Copy address">
-              <Copy className="w-4 h-4" aria-hidden /> {copied ? 'Copied' : 'Copy address'}
-            </button>
-            <p className="text-sm text-ink-2">{formatDay(booking.scheduled_date)} · {booking.scheduled_time}</p>
-            {address?.landmark && (
-              <p className="text-xs text-orange-300">
-                Landmark: {address.landmark}
-              </p>
-            )}
-          </div>
-        </div>
-
-        {/* Action Buttons: Navigate, Call, WhatsApp */}
-        <div className="grid grid-cols-3 gap-2 pt-2 border-t border-slate-800">
-          <a
-            href={mapsUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex flex-col items-center justify-center p-2.5 rounded-2xl bg-orange-500/10 hover:bg-orange-500/20 text-orange-400 border border-orange-500/20 active:scale-95 transition-all text-center"
+        {/* ── Header row ─────────────────────────────────────────────────── */}
+        <div className="flex items-center justify-between gap-3 animate-fade-up">
+          <button
+            onClick={() => navigate(-1)}
+            aria-label="Go back"
+            className="rounded-xl bg-card-2 border border-line w-9 h-9 flex items-center
+                       justify-center text-ink-2 hover:text-ink transition-colors shrink-0"
           >
-            <Navigation className="w-4 h-4 mb-1" />
-            <span className="text-[10px] font-syne font-bold">Directions</span>
-          </a>
+            <ArrowLeft className="w-4 h-4" />
+          </button>
 
-          {customerPhone ? (
-            <a
-              href={`tel:${customerPhone}`}
-              className="flex flex-col items-center justify-center p-2.5 rounded-2xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 active:scale-95 transition-all text-center"
-            >
-              <Phone className="w-4 h-4 mb-1" />
-              <span className="text-[10px] font-syne font-bold">Call User</span>
-            </a>
-          ) : (
-            <div className="flex flex-col items-center justify-center p-2.5 rounded-2xl bg-slate-800/40 text-slate-600 text-center opacity-50">
-              <Phone className="w-4 h-4 mb-1" />
-              <span className="text-[10px] font-syne">No Phone</span>
-            </div>
-          )}
-
-          {customerPhone ? (
-            <a
-              href={`https://wa.me/${whatsappNumber(customerPhone)}?text=Hello!%20I%20am%20your%20Houserve%20technician%20for%20booking%20${booking.booking_ref}.`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex flex-col items-center justify-center p-2.5 rounded-2xl bg-teal-500/10 hover:bg-teal-500/20 text-teal-400 border border-teal-500/20 active:scale-95 transition-all text-center"
-            >
-              <MessageSquare className="w-4 h-4 mb-1" />
-              <span className="text-[10px] font-syne font-bold">WhatsApp</span>
-            </a>
-          ) : null}
-        </div>
-      </div>
-
-      {/* 4. Service Breakdown & Guaranteed Payout */}
-      <div className="p-4 rounded-3xl bg-slate-900 border border-slate-800 space-y-3">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-syne font-bold uppercase tracking-wider text-slate-400">
-            Ordered Services
+          <span className="font-mono text-xs text-brand bg-brand-soft border border-brand/20
+                           px-3 py-1 rounded-full">
+            {booking.booking_ref}
           </span>
-          <span className="text-xs font-mono font-bold text-emerald-400">
-            You earn {formatMoney(payout)}
-          </span>
+
+          <StatusBadge status={booking.status} />
         </div>
 
-        <div className="space-y-2">
-          {booking.booking_items && booking.booking_items.length > 0 ? (
-            booking.booking_items.map((item) => (
-              <div key={item.id} className="flex items-center justify-between text-xs py-1.5 border-b border-slate-800/60 last:border-0">
-                <span className="text-slate-200">
-                  {item.services?.name || 'Service Task'} × {item.quantity}
-                </span>
-                <span className="font-mono text-slate-400">
-                  ₹{item.total_price}
-                </span>
-              </div>
-            ))
-          ) : (
-            <div className="flex items-center justify-between text-xs py-1.5">
-              <span className="text-slate-200">{booking.services?.name}</span>
-              <span className="font-mono text-slate-400">₹{booking.subtotal}</span>
-            </div>
-          )}
-        </div>
-
-        {booking.special_instructions && (
-          <div className="p-3 rounded-2xl bg-amber-950/20 border border-amber-500/20 text-xs text-amber-200">
-            <span className="font-bold text-amber-300">Instructions: </span>
-            {booking.special_instructions}
+        {/* ── Progress steps (only if not cancelled) ─────────────────────── */}
+        {!isCancelled && (
+          <div className="animate-fade-up stagger-1">
+            <ProgressSteps steps={[...STEPS]} current={currentStep} />
           </div>
         )}
-      </div>
 
-      {/* 5. Error Alerts if any */}
-      {errorMsg && (
-        <div className="p-3 rounded-2xl bg-rose-950/60 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
-          <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
-          <span>{errorMsg}</span>
-        </div>
-      )}
+        {/* ── Customer destination card ─────────────────────────────────── */}
+        <Card className="p-4 space-y-3 animate-fade-up stagger-2">
+          {/* Header: label + scheduling info */}
+          <div className="flex items-start justify-between gap-2">
+            <span className="text-xs text-ink-3 font-medium uppercase tracking-wide">
+              Customer destination
+            </span>
+            <div className="flex items-center gap-1.5 text-xs text-ink-3 shrink-0">
+              <CalendarDays className="w-3.5 h-3.5" />
+              <span>{formatDay(booking.scheduled_date)} · {booking.scheduled_time?.slice(0, 5)}</span>
+            </div>
+          </div>
 
-      {/* 6. Contextual Action Execution Bar */}
-      {!isCompleted && (
-        <div className="space-y-3 pt-2">
-          {/* Stage A: Accepted -> Tap to start transit */}
-          {booking.status === 'accepted' && (
-            <button
-              onClick={() => handleUpdateStatus('on_the_way')}
-              disabled={actionLoading}
-              className="w-full py-4 rounded-2xl bg-gradient-to-r from-orange-500 to-amber-500 text-slate-950 font-syne font-bold text-sm shadow-xl shadow-orange-500/25 active:scale-98 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
-            >
-              {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Navigation className="w-4 h-4" />}
-              <span>Start trip</span>
-            </button>
+          {/* Full address — selectable text */}
+          <p className="text-sm text-ink leading-relaxed select-text">
+            {fullAddr || 'Address not available'}
+          </p>
+
+          {/* Landmark */}
+          {snap?.landmark && (
+            <p className="text-xs text-warn bg-warn-soft rounded-lg px-3 py-1.5">
+              Landmark: {snap.landmark}
+            </p>
           )}
 
-          {/* Stage B: On The Way -> Tap to enter Start OTP */}
-          {booking.status === 'on_the_way' && (
-            <div className="space-y-2">
-              <button
-                onClick={() => setOtpModalOpen(true)}
-                disabled={actionLoading}
-                className="w-full py-4 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 text-slate-950 font-syne font-bold text-sm shadow-xl shadow-emerald-500/25 active:scale-98 transition-all flex items-center justify-center gap-2"
+          {/* Copy address */}
+          <button
+            onClick={handleCopyAddress}
+            className="flex items-center gap-1.5 text-sm text-brand font-semibold min-h-10
+                       transition-colors hover:text-brand/80"
+          >
+            {copied
+              ? <><Check className="w-4 h-4" />Copied!</>
+              : <><Copy className="w-4 h-4" />Copy address</>
+            }
+          </button>
+
+          {/* Action grid: Navigate · Call · WhatsApp */}
+          <div className="grid grid-cols-3 gap-2.5">
+            <a
+              href={mapsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="rounded-xl p-3 flex flex-col items-center gap-1.5
+                         text-xs font-semibold border
+                         bg-brand-soft border-brand/25 text-brand
+                         active:scale-[0.97] transition-transform"
+            >
+              <Navigation className="w-5 h-5" />
+              Navigate
+            </a>
+
+            {phone ? (
+              <a
+                href={`tel:${phone}`}
+                className="rounded-xl p-3 flex flex-col items-center gap-1.5
+                           text-xs font-semibold border
+                           bg-money-soft border-money/25 text-money
+                           active:scale-[0.97] transition-transform"
               >
-                <ShieldCheck className="w-4 h-4" />
-                <span>I've arrived · Enter customer code</span>
-              </button>
-              <p className="text-center text-[11px] text-slate-400">
-                Ask the customer for the 4-digit code shown in their Houserve app.
-              </p>
+                <Phone className="w-5 h-5" />
+                Call
+              </a>
+            ) : (
+              <div className="rounded-xl p-3 flex flex-col items-center gap-1.5
+                              text-xs font-semibold border border-line
+                              bg-card-2 text-ink-4 cursor-not-allowed opacity-50">
+                <Phone className="w-5 h-5" />
+                Call
+              </div>
+            )}
+
+            {phone ? (
+              <a
+                href={`https://wa.me/${whatsappNumber(phone)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="rounded-xl p-3 flex flex-col items-center gap-1.5
+                           text-xs font-semibold border
+                           bg-info-soft border-info/25 text-info
+                           active:scale-[0.97] transition-transform"
+              >
+                <MessageCircle className="w-5 h-5" />
+                WhatsApp
+              </a>
+            ) : (
+              <div className="rounded-xl p-3 flex flex-col items-center gap-1.5
+                              text-xs font-semibold border border-line
+                              bg-card-2 text-ink-4 cursor-not-allowed opacity-50">
+                <MessageCircle className="w-5 h-5" />
+                WhatsApp
+              </div>
+            )}
+          </div>
+        </Card>
+
+        {/* ── Services breakdown card ───────────────────────────────────── */}
+        <Card className="p-4 space-y-3 animate-fade-up stagger-3">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs text-ink-3 font-medium uppercase tracking-wide">
+              Services ordered
+            </span>
+            <span className="text-sm font-semibold text-money flex items-center gap-1">
+              You earn <MoneyDisplay amount={payout} size="sm" tone="money" />
+            </span>
+          </div>
+
+          {booking.booking_items && booking.booking_items.length > 0 ? (
+            <div className="space-y-2">
+              {booking.booking_items.map((item) => (
+                <div key={item.id} className="flex items-center justify-between gap-2">
+                  <span className="text-sm text-ink flex-1">
+                    {item.services?.name ?? 'Service'}
+                    {item.quantity > 1 && (
+                      <span className="text-ink-3 ml-1">× {item.quantity}</span>
+                    )}
+                  </span>
+                  <span className="text-sm font-semibold text-ink-2 shrink-0">
+                    ₹{item.total_price.toLocaleString('en-IN')}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm text-ink">{booking.services?.name ?? 'Service'}</span>
+              <span className="text-sm font-semibold text-ink-2">
+                ₹{booking.subtotal.toLocaleString('en-IN')}
+              </span>
             </div>
           )}
 
-          {/* Stage C: In Progress -> Upload after photo & complete */}
-          {booking.status === 'in_progress' && (
-            <div className="p-4 rounded-3xl bg-slate-900 border border-slate-800 space-y-4">
-              <div className="flex items-center gap-2 text-xs font-syne font-bold uppercase tracking-wider text-white">
-                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                <span>Service in Progress</span>
-              </div>
+          {/* Special instructions */}
+          {booking.special_instructions && (
+            <div className="rounded-xl bg-warn-soft border border-warn/20 px-3 py-2.5">
+              <p className="text-xs font-semibold text-warn mb-1">Special instructions</p>
+              <p className="text-sm text-ink">{booking.special_instructions}</p>
+            </div>
+          )}
+        </Card>
 
-              {/* Photo Proof Upload */}
-              <div>
-                <label className="block text-[11px] text-slate-400 mb-1">
-                  Upload "After Service" Photo Proof (Optional)
-                </label>
-                <label className="flex items-center justify-center gap-2 p-3 rounded-xl border border-dashed border-slate-700 bg-slate-950 hover:border-orange-500/50 cursor-pointer text-xs text-slate-400">
-                  <Camera className="w-4 h-4 text-orange-400" />
-                  <span>{proofAfterFile ? proofAfterFile.name : 'Take or upload photo'}</span>
+        {/* ── Error banner ─────────────────────────────────────────────── */}
+        {errorMsg && (
+          <ErrorBanner
+            message={errorMsg}
+            onRetry={() => setErrorMsg(null)}
+            className="animate-fade-up"
+          />
+        )}
+
+        {/* ── Action area ───────────────────────────────────────────────── */}
+        {!isCompleted && !isCancelled && (
+          <div className="space-y-3 animate-fade-up stagger-4">
+
+            {/* accepted → start travel */}
+            {booking.status === 'accepted' && (
+              <Button
+                variant="primary"
+                size="lg"
+                full
+                loading={actionLoading}
+                icon={<Navigation className="w-5 h-5" />}
+                onClick={handleStartTravel}
+              >
+                I'm heading there
+              </Button>
+            )}
+
+            {/* on_the_way → enter OTP */}
+            {booking.status === 'on_the_way' && (
+              <>
+                <Button
+                  size="lg"
+                  full
+                  onClick={() => setOtpModalOpen(true)}
+                  className="bg-money-soft border border-money text-money
+                             min-h-14 rounded-2xl text-base font-semibold
+                             inline-flex items-center justify-center gap-2.5
+                             active:scale-[0.97] transition-all"
+                >
+                  <ShieldCheck className="w-5 h-5" />
+                  I've Arrived · Enter OTP
+                </Button>
+                <p className="text-xs text-ink-3 text-center">
+                  Ask the customer for their one-time password to start the job.
+                </p>
+              </>
+            )}
+
+            {/* in_progress → complete */}
+            {booking.status === 'in_progress' && (
+              <Card className="p-4 space-y-4">
+                <p className="text-sm font-semibold text-ink">Complete the job</p>
+
+                {/* Photo proof upload */}
+                <label className="flex flex-col items-center gap-2 rounded-xl border-2 border-dashed
+                                  border-line hover:border-brand/50 transition-colors py-5 px-4
+                                  cursor-pointer text-center">
                   <input
                     type="file"
                     accept="image/*"
                     capture="environment"
-                    onChange={(e) => e.target.files && setProofAfterFile(e.target.files[0])}
-                    className="hidden"
+                    className="sr-only"
+                    onChange={(e) => setProofAfterFile(e.target.files?.[0] ?? null)}
                   />
+                  {proofAfterFile ? (
+                    <>
+                      <Check className="w-6 h-6 text-money" />
+                      <span className="text-sm text-money font-semibold">{proofAfterFile.name}</span>
+                      <span className="text-xs text-ink-3">Tap to change</span>
+                    </>
+                  ) : (
+                    <>
+                      <Camera className="w-6 h-6 text-ink-3" />
+                      <span className="text-sm font-semibold text-ink">Upload proof photo</span>
+                      <span className="text-xs text-ink-3">After-work photo (recommended)</span>
+                    </>
+                  )}
                 </label>
-              </div>
 
-              {/* Technician Notes */}
-              <div>
-                <label className="block text-[11px] text-slate-400 mb-1">
-                  Technician Notes / Work Summary
-                </label>
-                <textarea
-                  rows={2}
-                  value={technicianNotes}
-                  onChange={(e) => setTechnicianNotes(e.target.value)}
-                  placeholder="Completed wiring fix and tested switchboard successfully..."
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-xs text-slate-200 focus:outline-none focus:border-orange-500/50 resize-none"
+                {/* Technician notes */}
+                <Textarea
+                  label="Notes (optional)"
+                  placeholder="Describe what was done, parts replaced, etc."
+                  rows={3}
+                  value={techNotes}
+                  onChange={(e) => setTechNotes(e.target.value)}
                 />
-              </div>
 
-              {!confirmComplete ? (
-                <button
-                  onClick={() => setConfirmComplete(true)}
-                  disabled={actionLoading}
-                  className="w-full min-h-14 rounded-2xl bg-money text-slate-950 font-bold text-base active:scale-[0.98] transition-all flex items-center justify-center gap-2"
-                >
-                  <CheckCircle2 className="w-5 h-5" aria-hidden />
-                  <span>Complete job</span>
-                </button>
-              ) : (
-                <div className="space-y-3">
-                  <p className="text-sm text-ink-2 text-center">
-                    Mark the job complete? <span className="font-semibold text-money">{formatMoney(payout)}</span> will be added to your wallet. This can't be undone.
-                  </p>
-                  <div className="flex gap-3">
-                    <button onClick={() => setConfirmComplete(false)} disabled={actionLoading}
-                      className="flex-1 min-h-12 rounded-2xl bg-card-2 border border-line text-ink font-semibold">Not yet</button>
-                    <button onClick={handleCompleteJob} disabled={actionLoading}
-                      className="flex-[2] min-h-12 rounded-2xl bg-money text-slate-950 font-bold flex items-center justify-center gap-2 disabled:opacity-50">
-                      {actionLoading ? <><Loader2 className="w-5 h-5 animate-spin" aria-hidden /><span>Completing…</span></> : <span>Yes, complete</span>}
-                    </button>
+                {/* Two-step completion */}
+                {!showConfirmComplete ? (
+                  <Button
+                    variant="success"
+                    size="lg"
+                    full
+                    icon={<CheckCircle2 className="w-5 h-5" />}
+                    onClick={() => setShowConfirmComplete(true)}
+                  >
+                    Complete Job
+                  </Button>
+                ) : (
+                  <div className="rounded-2xl bg-money-soft border border-money/30 p-4 space-y-3">
+                    <p className="text-sm font-semibold text-ink text-center">
+                      Confirm job completion?
+                    </p>
+                    <div className="flex items-center justify-center gap-1.5">
+                      <span className="text-xs text-ink-3">You'll earn</span>
+                      <MoneyDisplay amount={payout} size="md" tone="money" />
+                    </div>
+                    <div className="flex gap-2.5">
+                      <Button
+                        variant="ghost"
+                        full
+                        onClick={() => setShowConfirmComplete(false)}
+                        disabled={completing}
+                      >
+                        Not yet
+                      </Button>
+                      <Button
+                        variant="success"
+                        full
+                        loading={completing}
+                        onClick={handleCompleteJob}
+                      >
+                        Yes, complete
+                      </Button>
+                    </div>
                   </div>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Completed Success Banner */}
-      {isCompleted && (
-        <div className="p-5 rounded-3xl bg-emerald-950/60 border border-emerald-500/40 text-center space-y-2">
-          <div className="w-12 h-12 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto">
-            <CheckCircle2 className="w-6 h-6" />
-          </div>
-          <h3 className="font-syne font-bold text-base text-white">
-            Job completed
-          </h3>
-          <p className="text-xs text-slate-300">
-            {formatMoney(payout)} has been added to your wallet.
-          </p>
-          <button
-            onClick={() => navigate('/wallet')}
-            className="mt-3 px-5 py-2.5 rounded-xl bg-emerald-500 text-slate-950 font-syne font-bold text-xs shadow-md"
-          >
-            View Wallet Balance
-          </button>
-        </div>
-      )}
-
-      {/* 7. Start OTP Modal */}
-      {otpModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md">
-          <div className="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-2xl space-y-4">
-            <div className="text-center">
-              <div className="w-12 h-12 rounded-2xl bg-orange-500/10 text-orange-400 flex items-center justify-center mx-auto mb-2 border border-orange-500/20">
-                <ShieldCheck className="w-6 h-6" />
-              </div>
-              <h3 className="font-syne font-bold text-lg text-white">
-                Customer Start OTP
-              </h3>
-              <p className="text-xs text-slate-400 mt-1">
-                Enter the 4-digit verification code from the customer's phone to start service.
-              </p>
-            </div>
-
-            {otpError && (
-              <div className="p-3 rounded-xl bg-rose-950/60 border border-rose-500/30 text-rose-300 text-xs">
-                {otpError}
-              </div>
+                )}
+              </Card>
             )}
-
-            <form onSubmit={handleVerifyOtp} className="space-y-4">
-              <input
-                type="text"
-                maxLength={4}
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                required
-                autoFocus
-                value={otpInput}
-                onChange={(e) => setOtpInput(e.target.value.replace(/[^0-9]/g, ''))}
-                placeholder="••••"
-                className="w-full bg-slate-950 border border-slate-700 rounded-2xl py-3 text-center text-3xl font-mono tracking-[0.5em] text-white focus:outline-none focus:border-orange-500"
-              />
-
-              <div className="flex gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => { setOtpModalOpen(false); setOtpInput(''); setOtpError(null); }}
-                  className="flex-1 py-3 rounded-xl bg-slate-800 text-slate-300 font-syne font-bold text-xs"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={actionLoading || otpInput.length < 4}
-                  className="flex-1 py-3 rounded-xl bg-orange-500 text-slate-950 font-syne font-bold text-xs shadow-md disabled:opacity-50"
-                >
-                  {actionLoading ? 'Verifying...' : 'Start Job'}
-                </button>
-              </div>
-            </form>
           </div>
-        </div>
+        )}
+
+        {/* ── Completed banner ──────────────────────────────────────────── */}
+        {isCompleted && (
+          <Card variant="money" className="p-5 space-y-3 animate-scale-in">
+            <div className="flex flex-col items-center gap-2 text-center">
+              <div className="w-14 h-14 rounded-2xl bg-money-soft border border-money/30
+                              flex items-center justify-center">
+                <CheckCircle2 className="w-7 h-7 text-money" />
+              </div>
+              <p className="text-base font-bold text-ink">Job Completed!</p>
+              <p className="text-sm text-ink-3">Your earnings have been credited to your wallet.</p>
+              <MoneyDisplay amount={payout} size="xl" tone="money" />
+            </div>
+            <Button
+              variant="success"
+              full
+              icon={<Wallet className="w-4 h-4" />}
+              onClick={() => navigate('/wallet')}
+            >
+              View Wallet
+            </Button>
+          </Card>
+        )}
+
+        {/* ── Cancelled notice ─────────────────────────────────────────── */}
+        {isCancelled && (
+          <div className="rounded-2xl bg-danger-soft border border-danger/20 p-4 text-center">
+            <p className="text-sm font-semibold text-danger">This booking was cancelled.</p>
+          </div>
+        )}
+
+      </div>
+
+      {/* ── OTP Modal ─────────────────────────────────────────────────── */}
+      {otpModalOpen && (
+        <OtpModal
+          onClose={() => setOtpModalOpen(false)}
+          onVerify={handleVerifyOtp}
+          loading={otpLoading}
+        />
       )}
-    </div>
+    </>
   );
 }

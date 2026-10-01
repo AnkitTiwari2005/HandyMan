@@ -6,42 +6,61 @@ import Navbar from './Navbar';
 import BottomNav from './BottomNav';
 import IncomingJobModal from './IncomingJobModal';
 import { ErrorBanner, Skeleton } from './ui';
+import { Wrench } from 'lucide-react';
 
+// ── Full-screen loader (only on first load, never on refresh) ─
 function FullScreenLoader() {
   return (
-    <div className="min-h-dvh bg-surface flex flex-col items-center justify-center gap-4 p-6">
-      <div className="w-10 h-10 rounded-full border-4 border-brand/20 border-t-brand animate-spin" role="status" aria-label="Loading" />
-      <Skeleton className="h-3 w-32" />
+    <div className="min-h-dvh bg-bg flex flex-col items-center justify-center gap-5 p-6">
+      {/* Animated brand logo */}
+      <div className="relative">
+        <div className="w-16 h-16 rounded-2xl gradient-brand flex items-center justify-center shadow-xl shadow-brand/30 animate-scale-in">
+          <Wrench className="w-8 h-8 text-white" aria-hidden />
+        </div>
+        {/* Spinning ring */}
+        <div className="absolute -inset-2 rounded-3xl border-2 border-brand/20 border-t-brand spin-slow" />
+      </div>
+      <div className="space-y-2 text-center animate-fade-up stagger-2">
+        <p className="text-sm font-semibold text-ink-2">Loading your workspace…</p>
+        <div className="flex items-center gap-1.5 justify-center">
+          {[0, 1, 2].map((i) => (
+            <span
+              key={i}
+              className="w-1.5 h-1.5 rounded-full bg-brand animate-pulse"
+              style={{ animationDelay: `${i * 0.2}s` }}
+            />
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
 
-/** Keeps the radar alive on EVERY tab (it used to live inside Dashboard only),
- *  and only while the partner is verified and online. */
+// ── Radar lifecycle — lives here so it survives ALL tab switches ─
 function useRadarLifecycle() {
-  const userId = useAuthStore((s) => s.user?.id);
-  const approved = useAuthStore((s) => s.technicianProfile?.verification_status === 'approved');
-  const online = useAuthStore((s) => s.technicianProfile?.is_online ?? false);
+  const userId       = useAuthStore((s) => s.user?.id);
+  const approved     = useAuthStore((s) => s.technicianProfile?.verification_status === 'approved');
+  const online       = useAuthStore((s) => s.technicianProfile?.is_online ?? false);
   const updateLocation = useAuthStore((s) => s.updateLocation);
-  const start = useRadarStore((s) => s.startRadarSubscription);
-  const fetchMyJobs = useRadarStore((s) => s.fetchMyJobs);
+  const start        = useRadarStore((s) => s.startRadarSubscription);
+  const fetchMyJobs  = useRadarStore((s) => s.fetchMyJobs);
 
   useEffect(() => {
     if (!userId || !approved) return;
     if (!online) {
-      void fetchMyJobs(userId); // still show my own accepted jobs while offline
+      void fetchMyJobs(userId);
       return;
     }
     return start(userId);
   }, [userId, approved, online, start, fetchMyJobs]);
 
-  // Location while online: now, then every 2 minutes (it used to be read once and never used).
+  // GPS location ping every 2 minutes while online
   useEffect(() => {
     if (!online || !('geolocation' in navigator)) return;
     const read = () =>
       navigator.geolocation.getCurrentPosition(
         (p) => void updateLocation(p.coords.latitude, p.coords.longitude),
-        (err) => console.warn('GPS skipped:', err.message),
+        (err) => console.warn('GPS:', err.message),
         { enableHighAccuracy: false, timeout: 10_000, maximumAge: 60_000 }
       );
     read();
@@ -50,34 +69,40 @@ function useRadarLifecycle() {
   }, [online, updateLocation]);
 }
 
+// ── Protected Route ────────────────────────────────────────────
 export const ProtectedRoute = () => {
   const { user, technicianProfile, isLoading, profileLoadedFor, profileError } = useAuthStore();
   const location = useLocation();
   useRadarLifecycle();
 
-  // Only the very first load shows a full-screen loader. Later refreshes are silent.
+  // Only the very first load shows the full-screen loader
   if (isLoading || (user && profileLoadedFor !== user.id)) return <FullScreenLoader />;
   if (!user) return <Navigate to="/login" replace />;
 
+  // Profile load error with no data
   if (profileError && !technicianProfile) {
     return (
-      <div className="min-h-dvh bg-surface p-6 flex items-center">
-        <div className="w-full max-w-lg mx-auto">
-          <ErrorBanner message={profileError} onRetry={() => void useAuthStore.getState().fetchProfiles(user.id)} />
+      <div className="min-h-dvh bg-bg p-6 flex items-center justify-center">
+        <div className="w-full max-w-sm space-y-4">
+          <ErrorBanner
+            message={profileError}
+            onRetry={() => void useAuthStore.getState().fetchProfiles(user.id)}
+          />
         </div>
       </div>
     );
   }
 
-  // No technician row yet -> finish trade + KYC setup. Not verified yet -> status screen.
+  // KYC routing
   if (!technicianProfile) return <Navigate to="/kyc" replace />;
   if (technicianProfile.verification_status !== 'approved') {
-    const allowed = location.pathname === '/profile';
-    if (!allowed) return <Navigate to="/kyc-pending" replace />;
+    if (location.pathname !== '/profile') {
+      return <Navigate to="/kyc-pending" replace />;
+    }
   }
 
   return (
-    <div className="min-h-dvh bg-surface text-ink flex flex-col max-w-lg mx-auto relative">
+    <div className="min-h-dvh bg-bg text-ink flex flex-col max-w-lg mx-auto relative">
       <Navbar />
       <main className="flex-1 pb-nav">
         <Outlet />
@@ -88,6 +113,7 @@ export const ProtectedRoute = () => {
   );
 };
 
+// ── Public Route (redirect logged-in users away) ──────────────
 export const PublicRoute = () => {
   const { user, isLoading } = useAuthStore();
   if (isLoading) return <FullScreenLoader />;

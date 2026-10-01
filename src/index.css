@@ -1,95 +1,255 @@
 @import "tailwindcss";
 
-/* ------------------------------------------------------------------
-   Design tokens. One brand colour (orange), semantic green/red/amber,
-   neutral surfaces. Pages should prefer these over raw palette classes.
-------------------------------------------------------------------- */
+/* ═══════════════════════════════════════════════════════════════
+   HANDYMAN DESIGN SYSTEM  — Tailwind v4 theme tokens
+   All pages consume these via utility classes:
+     bg-card · text-ink · border-line · text-brand · text-money …
+═══════════════════════════════════════════════════════════════ */
 @theme {
-  --color-brand: #F97316;
-  --color-brand-strong: #EA580C;
-  --color-brand-soft: rgb(249 115 22 / 0.14);
+  /* ── Brand ──────────────────────────────────────────────── */
+  --color-brand:       #F97316;
+  --color-brand-dim:   #EA580C;
+  --color-brand-soft:  rgb(249 115 22 / 0.12);
+  --color-brand-glow:  rgb(249 115 22 / 0.28);
 
-  --color-surface: #0B1120;        /* app background */
-  --color-card: #131C2E;           /* cards */
-  --color-card-2: #1B2639;         /* raised / inputs */
-  --color-line: #263249;           /* borders */
+  /* ── Surfaces ───────────────────────────────────────────── */
+  --color-bg:          #060C19;   /* page canvas           */
+  --color-surface:     #0A1120;   /* section background    */
+  --color-card:        #101927;   /* default card          */
+  --color-card-2:      #172035;   /* inputs / raised cards */
+  --color-card-3:      #1D2A45;   /* hovered / active card */
+  --color-line:        #243352;   /* borders               */
+  --color-line-soft:   rgb(36 51 82 / 0.45);
 
-  --color-ink: #F1F5F9;            /* primary text */
-  --color-ink-2: #B4C0D2;          /* secondary text (AA on card) */
-  --color-ink-3: #8D9BB0;          /* tertiary text (still >= 4.5:1 on surface) */
+  /* ── Text ───────────────────────────────────────────────── */
+  --color-ink:         #EDF2FF;   /* primary text   */
+  --color-ink-2:       #8DA4C5;   /* secondary text */
+  --color-ink-3:       #536C8E;   /* tertiary text  */
+  --color-ink-4:       #344F72;   /* disabled text  */
 
-  --color-money: #34D399;
-  --color-danger: #F87171;
-  --color-warn: #FBBF24;
+  /* ── Semantic ───────────────────────────────────────────── */
+  --color-money:       #10B981;
+  --color-money-dim:   #059669;
+  --color-money-soft:  rgb(16 185 129 / 0.12);
+  --color-danger:      #F87171;
+  --color-danger-dim:  #EF4444;
+  --color-danger-soft: rgb(248 113 113 / 0.12);
+  --color-warn:        #FBBF24;
+  --color-warn-soft:   rgb(251 191 36 / 0.12);
+  --color-info:        #60A5FA;
+  --color-info-soft:   rgb(96 165 250 / 0.12);
 
-  /* Stop-gap for legacy pages: invalid/low-contrast palette steps */
-  --color-slate-750: #243247;
-  --color-slate-500: #8D9BB0;
-  --color-slate-600: #75839A;
+  /* ── Backward compat alias (fixes 18 invisible borders) ─── */
+  --color-slate-750:   #1D2A45;
 
-  /* One UI family. Syne/mono names kept as aliases so legacy pages
-     stop mixing three typefaces while they are migrated. */
-  --font-sans: "DM Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-syne: "DM Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-mono: "DM Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-display: "Syne", "DM Sans", system-ui, sans-serif; /* logo only */
+  /* ── Typography ─────────────────────────────────────────── */
+  --font-sans:    "Inter",           system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: "Syne",            "Inter",   system-ui, sans-serif;
+  --font-mono:    "JetBrains Mono",  "Fira Code", ui-monospace, monospace;
+  /* Aliases so legacy pages stop mixing three faces */
+  --font-syne:    "Syne",            "Inter",   system-ui, sans-serif;
 }
 
+/* ─── Root CSS vars (not Tailwind, but used for layout math) ─── */
 :root {
-  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-top:    env(safe-area-inset-top,    0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
-  --header-h: 56px;
-  --nav-h: 64px;
+  --header-h:    60px;
+  --nav-h:       64px;
 }
 
-html { -webkit-text-size-adjust: 100%; }
+/* ─── Base ───────────────────────────────────────────────────── */
+html {
+  -webkit-text-size-adjust: 100%;
+  font-feature-settings: "cv02","cv03","cv04","cv11","ss01";
+  scroll-behavior: smooth;
+}
 
 body {
   margin: 0;
-  background-color: var(--color-surface);
+  background-color: var(--color-bg);
   color: var(--color-ink);
   font-family: var(--font-sans);
-  font-variant-numeric: tabular-nums;          /* money/times line up */
+  font-variant-numeric: tabular-nums;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
 }
 
-/* Technicians must be able to copy addresses, phone numbers, booking refs.
-   Only chrome (buttons/nav) is non-selectable. */
-button, nav, [role="tab"] { user-select: none; -webkit-user-select: none; }
+/* Only chrome elements are non-selectable; technicians copy addresses & refs */
+button, nav, [role="tab"] {
+  user-select: none;
+  -webkit-user-select: none;
+}
 
-/* Legacy pages use 10-11px text. Floor it at 12px until they are migrated. */
-.text-\[10px\], .text-\[11px\] { font-size: 12px !important; line-height: 1.35 !important; }
+/* Floor tiny legacy text at 12px instead of 10/11 */
+.text-\[10px\], .text-\[11px\] {
+  font-size: 12px !important;
+  line-height: 1.4 !important;
+}
 
-:focus-visible { outline: 2px solid var(--color-brand); outline-offset: 2px; }
+:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
 
-::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar { width: 3px; height: 3px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--color-line); border-radius: 9999px; }
 
-@keyframes soft-pulse {
-  0%   { box-shadow: 0 0 0 0 rgb(52 211 153 / 0.55); }
-  70%  { box-shadow: 0 0 0 10px rgb(52 211 153 / 0); }
-  100% { box-shadow: 0 0 0 0 rgb(52 211 153 / 0); }
-}
-.online-glow { animation: soft-pulse 2.4s infinite; }
-.radar-glow  { animation: soft-pulse 2s infinite; }
+/* ─── Safe-area helpers ──────────────────────────────────────── */
+.pt-safe  { padding-top:    max(0.75rem, var(--safe-top)); }
+.pb-safe  { padding-bottom: calc(var(--safe-bottom) + 1rem); }
+.pb-nav   { padding-bottom: calc(var(--nav-h) + var(--safe-bottom) + 1rem); }
+.mt-safe  { margin-top:     var(--safe-top); }
 
+/* ─── Glass morphism helpers ─────────────────────────────────── */
+.glass {
+  background: rgb(16 25 39 / 0.7);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+}
+.glass-light {
+  background: rgb(23 32 53 / 0.6);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+/* ─── Gradient utilities ─────────────────────────────────────── */
+.gradient-brand {
+  background: linear-gradient(135deg, #F97316 0%, #EA580C 100%);
+}
+.gradient-brand-soft {
+  background: linear-gradient(135deg, rgb(249 115 22 / 0.15) 0%, rgb(234 88 12 / 0.08) 100%);
+}
+.gradient-money {
+  background: linear-gradient(135deg, #10B981 0%, #059669 100%);
+}
+.gradient-dark {
+  background: linear-gradient(160deg, #111827 0%, #0A1120 100%);
+}
+.gradient-card {
+  background: linear-gradient(145deg, #172035 0%, #101927 100%);
+}
+
+/* ─── Skeleton loading ───────────────────────────────────────── */
 @keyframes shimmer { 100% { transform: translateX(100%); } }
-.skeleton { position: relative; overflow: hidden; background: var(--color-card-2); border-radius: 12px; }
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--color-card-2);
+  border-radius: 10px;
+}
 .skeleton::after {
-  content: ""; position: absolute; inset: 0; transform: translateX(-100%);
-  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.06), transparent);
-  animation: shimmer 1.4s infinite;
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg,
+    transparent 0%,
+    rgb(255 255 255 / 0.04) 50%,
+    transparent 100%
+  );
+  animation: shimmer 1.8s ease infinite;
 }
 
-/* Safe-area helpers (FIXED: the old .pb-safe was 88px and was applied to the nav itself) */
-.pt-safe { padding-top: max(0.75rem, var(--safe-top)); }
-.pb-safe { padding-bottom: calc(var(--safe-bottom) + 1rem); }
-.pb-nav  { padding-bottom: calc(var(--nav-h) + var(--safe-bottom) + 1rem); }
+/* ─── Pulse / glow animations ────────────────────────────────── */
+@keyframes pulse-brand {
+  0%   { box-shadow: 0 0 0 0   var(--color-brand-glow); }
+  70%  { box-shadow: 0 0 0 14px rgb(249 115 22 / 0); }
+  100% { box-shadow: 0 0 0 0   rgb(249 115 22 / 0); }
+}
+@keyframes pulse-money {
+  0%   { box-shadow: 0 0 0 0   rgb(16 185 129 / 0.4); }
+  70%  { box-shadow: 0 0 0 14px rgb(16 185 129 / 0); }
+  100% { box-shadow: 0 0 0 0   rgb(16 185 129 / 0); }
+}
+.pulse-brand  { animation: pulse-brand 2.4s ease-out infinite; }
+.pulse-money  { animation: pulse-money 2.4s ease-out infinite; }
+.online-glow  { animation: pulse-money 2.4s ease-out infinite; }
 
+/* ─── Motion ─────────────────────────────────────────────────── */
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0);    }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(100%); }
+  to   { opacity: 1; transform: translateY(0);    }
+}
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(0.88); }
+  to   { opacity: 1; transform: scale(1);    }
+}
+@keyframes spin-slow { to { transform: rotate(360deg); } }
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50%       { transform: translateY(-10px); }
+}
+@keyframes count-progress {
+  from { width: 100%; }
+  to   { width: 0%;   }
+}
+
+.animate-fade-up    { animation: fade-up  0.45s cubic-bezier(.16,1,.3,1) forwards; }
+.animate-fade-in    { animation: fade-in  0.35s ease forwards; }
+.animate-slide-up   { animation: slide-up 0.40s cubic-bezier(.16,1,.3,1) forwards; }
+.animate-scale-in   { animation: scale-in 0.35s cubic-bezier(.16,1,.3,1) forwards; }
+.spin-slow          { animation: spin-slow 10s linear infinite; }
+.float              { animation: float 3.5s ease-in-out infinite; }
+
+/* ─── Stagger helpers ────────────────────────────────────────── */
+.stagger-1 { animation-delay: 0.05s; }
+.stagger-2 { animation-delay: 0.12s; }
+.stagger-3 { animation-delay: 0.20s; }
+.stagger-4 { animation-delay: 0.28s; }
+.stagger-5 { animation-delay: 0.36s; }
+
+/* ─── Noise texture overlay (optional premium look) ─────────── */
+.noise::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+  pointer-events: none;
+  border-radius: inherit;
+}
+
+/* ─── Offer countdown bar ────────────────────────────────────── */
+.offer-countdown-bar {
+  animation: count-progress linear forwards;
+}
+
+/* ─── Range input styling ────────────────────────────────────── */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--color-card-2);
+  outline: none;
+  cursor: pointer;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--color-brand);
+  box-shadow: 0 0 0 4px var(--color-brand-soft);
+  cursor: grab;
+}
+input[type="range"]:active::-webkit-slider-thumb { cursor: grabbing; }
+
+/* ─── Reduced motion ─────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.001ms !important;

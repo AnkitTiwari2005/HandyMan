@@ -1,258 +1,318 @@
-import { useState, useEffect } from 'react';
-import { 
-  Wallet as WalletIcon, ArrowUpRight, ArrowDownLeft, 
-  IndianRupee, Sparkles, Building, AlertCircle, CheckCircle2, Loader2, ArrowRight 
-} from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import { useEffect, useState, useCallback } from 'react';
+import { ArrowDownLeft, ArrowUpRight, Wallet as WalletIcon, CheckCircle2, ReceiptText } from 'lucide-react';
+import {
+  Button, Card, Badge, SectionHeader, SkeletonCard,
+  EmptyState, ErrorBanner, StatCard, MoneyDisplay, Input, ModalBackdrop,
+} from '../components/ui';
 import { useAuthStore } from '../stores/authStore';
-import { triggerHapticImpact, triggerHapticNotification } from '../lib/haptics';
-import { formatDateTime, formatMoney } from '../lib/format';
+import { supabase } from '../lib/supabase';
+import { formatMoney, formatDateTime } from '../lib/format';
 import type { PayoutTransaction } from '../types';
 
-export default function Wallet() {
-  const { user, technicianProfile, fetchProfiles } = useAuthStore();
-  const [payouts, setPayouts] = useState<PayoutTransaction[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [withdrawModal, setWithdrawModal] = useState(false);
-  const [withdrawAmount, setWithdrawAmount] = useState('');
-  const [withdrawLoading, setWithdrawLoading] = useState(false);
-  const [successMsg, setSuccessMsg] = useState<string | null>(null);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+// ── quick-amount pills ─────────────────────────────────────────
+const QUICK_AMOUNTS = [500, 1000, 2000];
 
-  useEffect(() => {
+// ── helper: label for transaction type ────────────────────────
+function txLabel(type: PayoutTransaction['type']): string {
+  const map: Record<PayoutTransaction['type'], string> = {
+    job_payout: 'Job Payout',
+    incentive:  'Incentive',
+    withdrawal: 'Withdrawal',
+    penalty:    'Penalty',
+  };
+  return map[type] ?? type;
+}
+
+export default function Wallet() {
+  const { technicianProfile, profile, fetchProfiles, user } = useAuthStore();
+
+  const [ledger, setLedger]         = useState<PayoutTransaction[]>([]);
+  const [ledgerLoading, setLedgerLoading] = useState(true);
+  const [ledgerError, setLedgerError]     = useState<string | null>(null);
+
+  // withdrawal modal state
+  const [showModal, setShowModal]   = useState(false);
+  const [amount, setAmount]         = useState('');
+  const [withdrawing, setWithdrawing] = useState(false);
+  const [withdrawError, setWithdrawError] = useState<string | null>(null);
+  const [withdrawSuccess, setWithdrawSuccess] = useState(false);
+
+  const balance     = technicianProfile?.wallet_balance ?? 0;
+  const upiId       = technicianProfile?.bank_upi_id ?? null;
+  const totalJobs   = technicianProfile?.total_completed_jobs ?? 0;
+
+  // ── fetch ledger ──────────────────────────────────────────────
+  const fetchLedger = useCallback(async () => {
     if (!user) return;
-    fetchLedger();
+    setLedgerLoading(true);
+    setLedgerError(null);
+    const { data, error } = await supabase
+      .from('payout_transactions')
+      .select('*')
+      .eq('technician_id', user.id)
+      .order('created_at', { ascending: false })
+      .limit(50);
+    if (error) {
+      setLedgerError('Could not load transaction ledger. Tap to retry.');
+    } else {
+      setLedger((data ?? []) as PayoutTransaction[]);
+    }
+    setLedgerLoading(false);
   }, [user]);
 
-  const fetchLedger = async () => {
-    try {
-      setLoading(true);
-      const { data, error } = await supabase
-        .from('technician_payouts')
-        .select('*')
-        .eq('technician_id', user?.id)
-        .order('created_at', { ascending: false });
+  useEffect(() => { fetchLedger(); }, [fetchLedger]);
 
-      if (!error && data) {
-        setPayouts(data as PayoutTransaction[]);
-      }
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setLoading(false);
-    }
-  };
+  // ── derived: total earned (sum of job_payout + incentive) ─────
+  const totalEarned = ledger
+    .filter(t => t.type === 'job_payout' || t.type === 'incentive')
+    .reduce((sum, t) => sum + t.amount, 0);
 
-  const handleWithdraw = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!user || !technicianProfile) return;
-    triggerHapticImpact();
-    const amountNum = parseFloat(withdrawAmount);
-
-    if (isNaN(amountNum) || amountNum <= 0) {
-      setErrorMsg('Please enter a valid amount');
+  // ── withdrawal handler ────────────────────────────────────────
+  async function handleWithdraw() {
+    const amountNum = parseFloat(amount);
+    if (!amountNum || amountNum < 100) {
+      setWithdrawError('Minimum withdrawal is ₹100.');
       return;
     }
-
-    if (amountNum > technicianProfile.wallet_balance) {
-      setErrorMsg('Amount is more than your wallet balance');
+    if (amountNum > balance) {
+      setWithdrawError('Amount exceeds available balance.');
       return;
     }
-
-    setWithdrawLoading(true);
-    setErrorMsg(null);
-
-    try {
-      // Atomic, server-side: checks balance, deducts and writes the ledger in ONE transaction.
-      const { data, error } = await supabase.rpc('request_withdrawal', { p_amount: amountNum });
-      if (error) throw error;
-      const res = data as { success: boolean; message: string };
-      if (!res.success) {
-        setErrorMsg(res.message);
-        return;
-      }
-
-      triggerHapticNotification();
-      setSuccessMsg(`Withdrawal of ${formatMoney(amountNum)} requested. It shows as pending until the transfer is confirmed.`);
-      window.setTimeout(() => setSuccessMsg(null), 6000);
-      setWithdrawModal(false);
-      setWithdrawAmount('');
-      await fetchProfiles(user.id);
+    setWithdrawing(true);
+    setWithdrawError(null);
+    const { error } = await supabase.rpc('request_withdrawal', { p_amount: amountNum });
+    if (error) {
+      setWithdrawError(error.message || 'Withdrawal failed. Please try again.');
+    } else {
+      setWithdrawSuccess(true);
+      if (user) await fetchProfiles(user.id);
       await fetchLedger();
-    } catch (err: any) {
-      setErrorMsg(err.message || 'Withdrawal failed. Try again.');
-    } finally {
-      setWithdrawLoading(false);
+      setTimeout(() => {
+        setShowModal(false);
+        setWithdrawSuccess(false);
+        setAmount('');
+      }, 1800);
     }
-  };
+    setWithdrawing(false);
+  }
 
-  const balance = technicianProfile?.wallet_balance || 0;
+  function openModal() {
+    setAmount('');
+    setWithdrawError(null);
+    setWithdrawSuccess(false);
+    setShowModal(true);
+  }
 
   return (
-    <div className="p-4 space-y-4 max-w-lg mx-auto pb-safe">
-      <h1 className="text-xl font-bold text-ink">Earnings</h1>
+    <div className="pb-nav">
 
-      {/* Hero Wallet Balance Card */}
-      <div className="p-6 rounded-3xl bg-gradient-to-tr from-slate-900 via-slate-900 to-orange-950/60 border border-orange-500/30 shadow-2xl relative overflow-hidden">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <div className="p-2 rounded-xl bg-orange-500/10 text-orange-400 border border-orange-500/20">
-              <WalletIcon className="w-5 h-5" />
+      {/* ── Hero Balance Card ─────────────────────────────────── */}
+      <div className="mx-4 mt-4 rounded-3xl overflow-hidden relative animate-fade-up">
+        <div className="gradient-brand relative">
+          {/* decorative circles */}
+          <div className="absolute -top-10 -right-10 w-52 h-52 bg-white/5 rounded-full pointer-events-none" />
+          <div className="absolute top-24 -right-6 w-28 h-28 bg-white/5 rounded-full pointer-events-none" />
+
+          <div className="relative p-5 space-y-4">
+            {/* header row */}
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-white/15 flex items-center justify-center">
+                  <WalletIcon className="w-4 h-4 text-white" aria-hidden />
+                </div>
+                <span className="text-sm font-medium text-white/80">Available Balance</span>
+              </div>
+              <Badge tone="money" className="bg-white/15 text-white border-white/20">
+                Paid per job
+              </Badge>
             </div>
-            <span className="text-xs font-syne font-bold uppercase tracking-wider text-slate-300">
-              Available Balance
-            </span>
+
+            {/* balance */}
+            <div>
+              <MoneyDisplay amount={balance} size="xl" className="text-white" />
+            </div>
+
+            {/* UPI */}
+            <p className="text-xs text-white/60">
+              {upiId ? `UPI: ${upiId}` : 'Add UPI in Profile to withdraw'}
+            </p>
+
+            {/* Withdraw CTA */}
+            <button
+              onClick={openModal}
+              disabled={balance <= 0}
+              className="w-full flex items-center justify-center gap-2 bg-white/15 backdrop-blur-sm border border-white/20 rounded-2xl py-3 text-sm font-semibold text-white transition-all duration-200 hover:bg-white/25 active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <ArrowUpRight className="w-4 h-4" aria-hidden />
+              Withdraw to UPI
+            </button>
           </div>
-          <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20 flex items-center gap-1">
-            <Sparkles className="w-3 h-3" />
-            Paid per job
-          </span>
         </div>
-
-        <div className="flex items-baseline gap-1 my-2">
-          <span className="text-4xl font-mono font-bold text-white tracking-tight">
-            {formatMoney(balance, { paise: true })}
-          </span>
-        </div>
-
-        <p className="text-[11px] text-slate-400 mt-2">
-          Linked Payout UPI: <span className="font-mono text-slate-200">{technicianProfile?.bank_upi_id || 'Not configured'}</span>
-        </p>
-
-        {/* Withdrawal Trigger Button */}
-        <button
-          onClick={() => {
-            triggerHapticImpact();
-            setWithdrawModal(true);
-          }}
-          disabled={balance <= 0}
-          className="w-full mt-5 py-3 rounded-2xl bg-gradient-to-r from-orange-500 to-amber-500 text-slate-950 font-syne font-bold text-xs shadow-lg shadow-orange-500/20 active:scale-98 transition-all flex items-center justify-center gap-1.5 disabled:opacity-40"
-        >
-          <ArrowUpRight className="w-4 h-4 text-slate-950" />
-          <span>Withdraw to Bank / UPI</span>
-        </button>
       </div>
 
-      {successMsg && (
-        <div className="p-3 rounded-2xl bg-emerald-950/60 border border-emerald-500/30 text-emerald-300 text-xs flex items-center gap-2">
-          <CheckCircle2 className="w-4 h-4 shrink-0" />
-          <span>{successMsg}</span>
-        </div>
-      )}
+      {/* ── Metrics row ──────────────────────────────────────────── */}
+      <div className="flex gap-3 px-4 mt-4 animate-fade-up stagger-1">
+        <StatCard
+          label="Total Earned"
+          value={<MoneyDisplay amount={totalEarned} size="sm" tone="money" />}
+          tone="money"
+          icon={<ReceiptText className="w-4 h-4" />}
+        />
+        <StatCard
+          label="Jobs Done"
+          value={totalJobs}
+          tone="brand"
+          icon={<CheckCircle2 className="w-4 h-4" />}
+        />
+      </div>
 
-      {/* Transaction History Ledger */}
-      <div>
-        <h3 className="text-xs font-syne font-bold uppercase tracking-wider text-slate-300 mb-3 px-1">
-          Settlement Ledger ({payouts.length})
-        </h3>
+      {/* ── Transaction Ledger ───────────────────────────────────── */}
+      <div className="px-4 mt-5 space-y-3 animate-fade-up stagger-2">
+        <SectionHeader
+          title="Ledger"
+          action={
+            !ledgerLoading && ledger.length > 0
+              ? <Badge tone="neutral">{ledger.length} entries</Badge>
+              : undefined
+          }
+        />
 
-        {loading ? (
-          <div className="p-8 text-center">
-            <Loader2 className="w-6 h-6 animate-spin text-orange-500 mx-auto mb-2" />
-            <p className="text-xs text-slate-400">Loading ledger...</p>
+        {ledgerError && (
+          <ErrorBanner message={ledgerError} onRetry={fetchLedger} />
+        )}
+
+        {ledgerLoading ? (
+          <div className="space-y-3">
+            {[0, 1, 2, 3].map(i => <SkeletonCard key={i} lines={2} />)}
           </div>
-        ) : payouts.length === 0 ? (
-          <div className="p-8 rounded-3xl bg-slate-900/40 border border-slate-800 text-center">
-            <p className="text-xs font-syne text-slate-400">No transactions recorded yet.</p>
-            <p className="text-[11px] text-slate-500 mt-1">Earnings will credit automatically upon job completion.</p>
-          </div>
+        ) : ledger.length === 0 && !ledgerError ? (
+          <EmptyState
+            icon={<ReceiptText className="w-6 h-6" />}
+            title="No transactions yet"
+            body="Your payouts and withdrawal requests will appear here once you complete your first job."
+          />
         ) : (
           <div className="space-y-2.5">
-            {payouts.map((tx) => {
+            {ledger.map(tx => {
               const isCredit = tx.type === 'job_payout' || tx.type === 'incentive';
-
               return (
-                <div
-                  key={tx.id}
-                  className="p-3.5 rounded-2xl bg-slate-900 border border-slate-800/80 flex items-center justify-between"
-                >
+                <Card key={tx.id} className="p-4">
                   <div className="flex items-center gap-3">
-                    <div className={`p-2 rounded-xl border ${
-                      isCredit
-                        ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                        : 'bg-rose-500/10 text-rose-400 border-rose-500/20'
-                    }`}>
-                      {isCredit ? <ArrowDownLeft className="w-4 h-4" /> : <ArrowUpRight className="w-4 h-4" />}
+                    {/* icon */}
+                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${isCredit ? 'bg-money-soft' : 'bg-card-2'}`}>
+                      {isCredit
+                        ? <ArrowDownLeft className="w-5 h-5 text-money" aria-hidden />
+                        : <ArrowUpRight className="w-5 h-5 text-ink-3" aria-hidden />
+                      }
                     </div>
-                    <div>
-                      <p className="text-xs font-syne font-bold text-white capitalize">
-                        {tx.type.replace('_', ' ')}
-                      </p>
-                      <p className="text-xs text-slate-400 truncate max-w-[180px]">
-                        {tx.notes || formatDateTime(tx.created_at)}
-                      </p>
-                    </div>
-                  </div>
 
-                  <div className="text-right">
-                    <p className={`text-base font-bold ${
-                      isCredit ? 'text-emerald-400' : 'text-slate-200'
-                    }`}>
-                      {isCredit ? '+' : '−'}{formatMoney(Number(tx.amount), { paise: true })}
-                    </p>
-                    <span className="text-xs text-slate-400">
-                      {tx.status === 'pending' ? 'Pending · ' : ''}{formatDateTime(tx.created_at)}
-                    </span>
+                    {/* center */}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-ink">{txLabel(tx.type)}</p>
+                      <p className="text-xs text-ink-3 mt-0.5 truncate">
+                        {tx.notes ?? formatDateTime(tx.created_at)}
+                      </p>
+                      {tx.status === 'pending' && (
+                        <Badge tone="warn" className="mt-1">Pending</Badge>
+                      )}
+                      {tx.status === 'failed' && (
+                        <Badge tone="danger" className="mt-1">Failed</Badge>
+                      )}
+                    </div>
+
+                    {/* amount */}
+                    <div className="text-right shrink-0">
+                      <span className={`text-base font-bold font-mono ${isCredit ? 'text-money' : 'text-ink-2'}`}>
+                        {isCredit ? '+' : '−'}{formatMoney(tx.amount)}
+                      </span>
+                    </div>
                   </div>
-                </div>
+                </Card>
               );
             })}
           </div>
         )}
       </div>
 
-      {/* Withdrawal Modal */}
-      {withdrawModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md">
-          <div className="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-2xl space-y-4">
-            <h3 className="font-syne font-bold text-lg text-white">
-              Withdraw Earnings
-            </h3>
-            <p className="text-xs text-slate-400">
-              Funds will be dispatched to <span className="font-mono text-orange-400">{technicianProfile?.bank_upi_id}</span>
-            </p>
+      {/* ── Withdrawal Modal ─────────────────────────────────────── */}
+      {showModal && (
+        <ModalBackdrop onClose={() => !withdrawing && setShowModal(false)}>
+          <Card className="p-5 space-y-4">
+            <div>
+              <h2 className="text-lg font-bold text-ink">Withdraw Balance</h2>
+              {upiId
+                ? <p className="text-xs text-ink-3 mt-1">Funds will be sent to <span className="font-mono text-ink-2">{upiId}</span></p>
+                : <p className="text-xs text-warn mt-1">⚠ No UPI linked — add one in Profile first.</p>
+              }
+            </div>
 
-            {errorMsg && (
-              <div className="p-3 rounded-xl bg-rose-950/60 border border-rose-500/30 text-rose-300 text-xs">
-                {errorMsg}
+            {withdrawSuccess ? (
+              <div className="flex flex-col items-center gap-3 py-6">
+                <div className="w-14 h-14 rounded-2xl bg-money-soft flex items-center justify-center">
+                  <CheckCircle2 className="w-7 h-7 text-money" />
+                </div>
+                <p className="text-base font-semibold text-ink">Withdrawal requested!</p>
+                <p className="text-sm text-ink-2 text-center">Your payout is being processed.</p>
               </div>
-            )}
-
-            <form onSubmit={handleWithdraw} className="space-y-4">
-              <div>
-                <label className="block text-sm text-slate-300 mb-1.5">Amount (₹) · minimum ₹100</label>
-                <input
+            ) : (
+              <>
+                <Input
+                  label="Amount"
                   type="number"
-                  min="100"
+                  placeholder="Enter amount (min ₹100)"
+                  value={amount}
+                  onChange={e => { setAmount(e.target.value); setWithdrawError(null); }}
+                  error={withdrawError ?? undefined}
+                  min={100}
                   max={balance}
-                  inputMode="decimal"
                   required
-                  value={withdrawAmount}
-                  onChange={(e) => setWithdrawAmount(e.target.value)}
-                  placeholder={`Max ₹${balance.toFixed(0)}`}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl py-3 px-3 text-lg font-mono text-white focus:outline-none focus:border-orange-500"
                 />
-              </div>
 
-              <div className="flex gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => setWithdrawModal(false)}
-                  className="flex-1 py-3 rounded-xl bg-slate-800 text-slate-300 font-syne font-bold text-xs"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={withdrawLoading || !withdrawAmount}
-                  className="flex-1 py-3 rounded-xl bg-gradient-to-r from-orange-500 to-amber-500 text-slate-950 font-syne font-bold text-xs shadow-md disabled:opacity-50"
-                >
-                  {withdrawLoading ? 'Transferring...' : 'Confirm Payout'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+                {/* quick amounts */}
+                <div>
+                  <p className="text-xs text-ink-3 mb-2">Quick select</p>
+                  <div className="flex gap-2">
+                    {QUICK_AMOUNTS.map(q => (
+                      <button
+                        key={q}
+                        type="button"
+                        disabled={q > balance}
+                        onClick={() => { setAmount(String(q)); setWithdrawError(null); }}
+                        className={`flex-1 py-2 rounded-xl text-sm font-semibold border transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed
+                          ${amount === String(q)
+                            ? 'bg-brand-soft text-brand border-brand/40'
+                            : 'bg-card-2 text-ink-2 border-line hover:border-ink-3 hover:text-ink'
+                          }`}
+                      >
+                        ₹{q.toLocaleString('en-IN')}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex gap-2 pt-1">
+                  <Button
+                    variant="ghost"
+                    full
+                    onClick={() => setShowModal(false)}
+                    disabled={withdrawing}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="success"
+                    full
+                    loading={withdrawing}
+                    disabled={!upiId || !amount || parseFloat(amount) < 100}
+                    onClick={handleWithdraw}
+                  >
+                    Confirm Payout
+                  </Button>
+                </div>
+              </>
+            )}
+          </Card>
+        </ModalBackdrop>
       )}
     </div>
   );

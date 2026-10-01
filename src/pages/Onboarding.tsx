@@ -1,141 +1,163 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Zap, Navigation, Banknote, Wrench } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Zap, Navigation, Banknote, ArrowRight, ShieldCheck } from 'lucide-react';
-import { triggerHapticImpact } from '../lib/haptics';
+import { Button } from '../components/ui';
 
-const slides = [
+interface Slide {
+  icon: React.ReactNode;
+  gradient: string;
+  title: string;
+  subtitle: string;
+  description: string;
+}
+
+const SLIDES: Slide[] = [
   {
-    id: 1,
-    icon: Zap,
-    title: 'Instant Job Radar',
-    subtitle: 'Zero Bidding Wars',
-    description: 'Get matched directly with pre-priced, verified home service bookings from Houserve customers in your area.',
-    color: 'from-orange-500 to-amber-500',
-    badge: 'Direct Dispatch',
+    icon: <Zap className="w-12 h-12 text-white" strokeWidth={2} />,
+    gradient: 'from-brand to-orange-600',
+    title: 'Instant Job Matching',
+    subtitle: 'ZERO BIDDING',
+    description:
+      'Receive direct, pre-priced bookings from verified customers — no auctions, no haggling. Just show up and get paid.',
   },
   {
-    id: 2,
-    icon: Navigation,
-    title: 'Turn-by-Turn Routing',
-    subtitle: 'Precision Arrival',
-    description: 'One-tap Google Maps navigation right to the customer doorstep with anti-fraud OTP job start verification.',
-    color: 'from-blue-500 to-cyan-500',
-    badge: 'Verified Locations',
+    icon: <Navigation className="w-12 h-12 text-white" strokeWidth={2} />,
+    gradient: 'from-blue-500 to-cyan-500',
+    title: 'Turn-by-Turn Navigation',
+    subtitle: 'PRECISE ROUTING',
+    description:
+      'Built-in Maps integration guides you to every job. OTP-protected check-ins keep your earnings safe from fraud.',
   },
   {
-    id: 3,
-    icon: Banknote,
-    title: 'Fast Daily Payouts',
-    subtitle: 'Guaranteed 80% Take-Home',
-    description: 'Earn on every completed service with zero hidden deductions. Request payouts directly to your UPI or bank account.',
-    color: 'from-emerald-500 to-teal-500',
-    badge: 'Daily Settlements',
+    icon: <Banknote className="w-12 h-12 text-white" strokeWidth={2} />,
+    gradient: 'from-money to-green-600',
+    title: 'Daily Payouts',
+    subtitle: '80% GUARANTEED',
+    description:
+      'Your earnings are credited the moment a job is marked complete. Keep 80 % of every booking — no hidden deductions.',
   },
 ];
 
+const slideVariants = {
+  enter: (dir: number) => ({ x: dir > 0 ? 280 : -280, opacity: 0 }),
+  center: { x: 0, opacity: 1 },
+  exit: (dir: number) => ({ x: dir > 0 ? -280 : 280, opacity: 0 }),
+};
+
 export default function Onboarding() {
   const navigate = useNavigate();
-  const [currentSlide, setCurrentSlide] = useState(0);
+  const [current, setCurrent] = useState(0);
+  const [direction, setDirection] = useState(1);
 
-  const handleNext = () => {
-    triggerHapticImpact();
-    if (currentSlide < slides.length - 1) {
-      setCurrentSlide(currentSlide + 1);
+  const goNext = () => {
+    if (current < SLIDES.length - 1) {
+      setDirection(1);
+      setCurrent((c) => c + 1);
     } else {
       navigate('/signup');
     }
   };
 
-  const slide = slides[currentSlide];
-  const Icon = slide.icon;
+  const slide = SLIDES[current];
+  const isLast = current === SLIDES.length - 1;
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-between p-6 max-w-lg mx-auto">
-      {/* Top Header */}
-      <div className="flex items-center justify-between pt-safe">
+    <div className="min-h-dvh bg-bg flex flex-col max-w-lg mx-auto">
+      {/* Top bar */}
+      <div className="flex items-center justify-between px-5 pt-safe pt-4 pb-2">
         <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-xl bg-orange-500 flex items-center justify-center font-syne font-bold text-white text-sm">
-            H
+          <div className="w-8 h-8 rounded-xl gradient-brand flex items-center justify-center">
+            <Wrench className="w-4 h-4 text-white" strokeWidth={2.5} />
           </div>
-          <span className="font-syne font-bold text-base text-white">HandyMan</span>
+          <span className="font-display text-base font-bold text-white">
+            Handy<span className="text-brand">Man</span>
+          </span>
         </div>
+
         <button
           onClick={() => navigate('/login')}
-          className="text-xs font-syne font-bold text-slate-400 hover:text-white px-3 py-1.5 rounded-full hover:bg-slate-900 transition-colors"
+          className="text-sm text-ink-3 hover:text-ink transition-colors px-3 py-2 rounded-xl"
         >
-          Sign In
+          Skip
         </button>
       </div>
 
-      {/* Slide Visual and Content */}
-      <div className="my-auto py-8">
-        <AnimatePresence mode="wait">
+      {/* Slide area */}
+      <div className="flex-1 flex flex-col items-center justify-center px-6 overflow-hidden">
+        <AnimatePresence mode="wait" custom={direction}>
           <motion.div
-            key={slide.id}
-            initial={{ opacity: 0, x: 20 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: -20 }}
-            transition={{ duration: 0.3 }}
-            className="flex flex-col items-center text-center"
+            key={current}
+            custom={direction}
+            variants={slideVariants}
+            initial="enter"
+            animate="center"
+            exit="exit"
+            transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+            className="flex flex-col items-center gap-5 text-center w-full"
           >
-            {/* Visual Icon Halo */}
-            <div className="relative mb-8">
-              <div className={`w-28 h-28 rounded-3xl bg-gradient-to-tr ${slide.color} flex items-center justify-center shadow-2xl shadow-orange-500/20`}>
-                <Icon className="w-14 h-14 text-white" />
-              </div>
-              <div className="absolute -bottom-3 left-1/2 -translate-x-1/2 px-3 py-0.5 rounded-full bg-slate-900 border border-slate-750 text-[10px] font-syne font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1 shadow-md whitespace-nowrap">
-                <ShieldCheck className="w-3 h-3 text-orange-400" />
-                <span>{slide.badge}</span>
-              </div>
+            {/* Icon badge */}
+            <div
+              className={`w-24 h-24 rounded-3xl bg-gradient-to-br ${slide.gradient} flex items-center justify-center shadow-2xl`}
+            >
+              {slide.icon}
             </div>
 
-            {/* Typography */}
-            <h2 className="text-2xl font-syne font-bold text-white mb-1">
-              {slide.title}
-            </h2>
-            <p className="text-xs font-mono font-bold text-orange-400 uppercase tracking-widest mb-3">
+            {/* Subtitle / pill */}
+            <p className="text-brand font-mono text-xs uppercase tracking-widest">
               {slide.subtitle}
             </p>
-            <p className="text-sm text-slate-400 max-w-xs leading-relaxed">
+
+            {/* Title */}
+            <h2 className="font-display text-3xl font-bold text-ink leading-tight">
+              {slide.title}
+            </h2>
+
+            {/* Description */}
+            <p className="text-sm text-ink-2 max-w-xs leading-relaxed">
               {slide.description}
             </p>
           </motion.div>
         </AnimatePresence>
       </div>
 
-      {/* Bottom Controls */}
-      <div className="space-y-6 pb-safe">
-        {/* Pagination Dots */}
-        <div className="flex items-center justify-center gap-2">
-          {slides.map((_, i) => (
+      {/* Bottom controls */}
+      <div className="px-5 pb-safe pb-8 flex flex-col items-center gap-6">
+        {/* Pagination dots */}
+        <div className="flex items-center gap-2">
+          {SLIDES.map((_, i) => (
             <button
               key={i}
-              onClick={() => setCurrentSlide(i)}
-              className={`h-1.5 rounded-full transition-all duration-300 ${
-                i === currentSlide ? 'w-8 bg-orange-500' : 'w-2 bg-slate-800'
+              onClick={() => {
+                setDirection(i > current ? 1 : -1);
+                setCurrent(i);
+              }}
+              className={`h-2 rounded-full transition-all duration-300 ${
+                i === current ? 'w-6 bg-brand' : 'w-2 bg-card-3'
               }`}
+              aria-label={`Slide ${i + 1}`}
             />
           ))}
         </div>
 
-        {/* Buttons */}
-        <div className="space-y-3">
-          <button
-            onClick={handleNext}
-            className="w-full py-4 px-6 rounded-2xl bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-slate-950 font-syne font-bold text-sm shadow-xl shadow-orange-500/25 active:scale-98 transition-all flex items-center justify-center gap-2"
-          >
-            <span>{currentSlide === slides.length - 1 ? 'Start Partner Registration' : 'Next'}</span>
-            <ArrowRight className="w-4 h-4 text-slate-950" />
-          </button>
+        {/* CTA */}
+        <Button
+          variant="primary"
+          size="lg"
+          full
+          onClick={goNext}
+        >
+          {isLast ? 'Get Started' : 'Next'}
+        </Button>
 
-          <button
-            onClick={() => navigate('/login')}
-            className="w-full py-3 text-center text-xs font-syne font-bold text-slate-400 hover:text-white transition-colors"
-          >
-            Already an approved partner? <span className="text-orange-400 underline">Log In</span>
-          </button>
-        </div>
+        {/* Login link */}
+        <button
+          onClick={() => navigate('/login')}
+          className="text-sm text-ink-3 hover:text-ink transition-colors pb-2"
+        >
+          Already a partner?{' '}
+          <span className="text-brand font-medium">Log in</span>
+        </button>
       </div>
     </div>
   );
