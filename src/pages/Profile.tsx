@@ -6,32 +6,49 @@ import {
 import { useAuthStore } from '../stores/authStore';
 import { supabase } from '../lib/supabase';
 
-// ── All 7 supported trades ─────────────────────────────────────
+// ── Canonical categories matching the database service catalog ──
 const ALL_TRADES = [
-  'Electrician',
-  'Plumber',
-  'Carpenter',
-  'Painter',
-  'AC Technician',
-  'Appliance Repair',
+  'Electrical',
+  'Plumbing',
+  'Carpentry',
+  'Painting',
   'Cleaning',
+  'Pest Control',
+  'Appliance Repair',
 ] as const;
+
+// ── Normalize legacy terms to canonical category names ────────
+function normalizeTrade(t: string): string {
+  const map: Record<string, string> = {
+    'Electrician': 'Electrical',
+    'Plumber': 'Plumbing',
+    'Carpenter': 'Carpentry',
+    'Painter': 'Painting',
+    'AC Technician': 'Appliance Repair',
+  };
+  return map[t] || t;
+}
 
 export default function Profile() {
   const { profile, technicianProfile, fetchProfiles, user, signOut } = useAuthStore();
 
-  // local editable state
-  const [skills, setSkills]   = useState<string[]>(technicianProfile?.skills ?? []);
-  const [radius, setRadius]   = useState<number>(technicianProfile?.service_radius_km ?? 10);
-  const [saving, setSaving]   = useState(false);
-  const [saveError, setSaveError]   = useState<string | null>(null);
+  // local editable state with normalization
+  const [skills, setSkills] = useState<string[]>(() => {
+    const raw = technicianProfile?.skills ?? [];
+    return Array.from(new Set(raw.map(normalizeTrade)));
+  });
+  const [radius, setRadius] = useState<number>(technicianProfile?.service_radius_km ?? 15);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
-  // sync when store loads
+  // sync when technicianProfile loads or changes
   useEffect(() => {
     if (technicianProfile) {
-      setSkills(technicianProfile.skills ?? []);
-      setRadius(technicianProfile.service_radius_km ?? 10);
+      const raw = technicianProfile.skills ?? [];
+      const normalized = Array.from(new Set(raw.map(normalizeTrade)));
+      setSkills(normalized);
+      setRadius(technicianProfile.service_radius_km ?? 15);
     }
   }, [technicianProfile]);
 
@@ -52,15 +69,24 @@ export default function Profile() {
     setSaving(true);
     setSaveError(null);
     setSaveSuccess(false);
+
+    const cleanSkills = Array.from(new Set(skills.map(normalizeTrade)));
+
     const { error } = await supabase
       .from('technician_profiles')
-      .update({ skills, service_radius_km: radius, updated_at: new Date().toISOString() })
+      .update({
+        skills: cleanSkills,
+        service_radius_km: radius,
+        updated_at: new Date().toISOString(),
+      })
       .eq('id', user.id);
+
     if (error) {
       setSaveError(error.message || 'Could not save changes. Please try again.');
     } else {
       setSaveSuccess(true);
       await fetchProfiles(user.id);
+      setTimeout(() => setSaveSuccess(false), 3000);
     }
     setSaving(false);
   }
@@ -68,18 +94,16 @@ export default function Profile() {
   // ── derived display values ────────────────────────────────────
   const name     = profile?.full_name ?? 'Partner';
   const email    = profile?.email ?? '';
-  const phone    = profile?.phone ?? '';
   const initial  = name.charAt(0).toUpperCase();
-  const rating   = technicianProfile?.rating ?? 0;
+  const rating   = technicianProfile?.rating ?? 5.0;
   const jobsDone = technicianProfile?.total_completed_jobs ?? 0;
-  const expYears = technicianProfile?.experience_years ?? 0;
+  const expYears = technicianProfile?.experience_years ?? 3;
   const verified = technicianProfile?.verification_status === 'approved';
   const upiId    = technicianProfile?.bank_upi_id;
   const bankName = technicianProfile?.bank_account_name;
 
   return (
-    <div className="pb-nav space-y-0">
-
+    <div className="pb-32 space-y-0">
       {/* ── Profile Hero ─────────────────────────────────────────── */}
       <div className="gradient-brand relative overflow-hidden">
         {/* decorative depth circles */}
@@ -98,46 +122,31 @@ export default function Profile() {
             <div className="min-w-0">
               <h1 className="text-xl font-bold text-white truncate">{name}</h1>
               {email && <p className="text-sm text-white/70 mt-0.5 truncate">{email}</p>}
-              {phone && <p className="text-sm text-white/70 truncate">{phone}</p>}
               <div className="mt-2">
-                {verified
-                  ? (
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-money-soft text-money border border-money/20">
-                      <CheckCircle2 className="w-3 h-3" aria-hidden /> Verified
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-warn-soft text-warn border border-warn/20">
-                      Pending KYC
-                    </span>
-                  )
-                }
+                {verified ? (
+                  <span className="inline-flex items-center gap-1 bg-white/20 text-white text-xs font-semibold px-2.5 py-0.5 rounded-full backdrop-blur-sm">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-300" /> Verified Partner
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 bg-amber-400/20 text-amber-200 text-xs font-semibold px-2.5 py-0.5 rounded-full backdrop-blur-sm">
+                    Pending Verification
+                  </span>
+                )}
               </div>
             </div>
           </div>
         </div>
       </div>
 
-      {/* ── Stats row (floats over hero bottom) ─────────────────── */}
-      <div className="grid grid-cols-3 gap-3 px-4 -mt-6 animate-fade-up">
+      {/* ── Floating Stats Row ────────────────────────────────────── */}
+      <div className="grid grid-cols-3 gap-3 px-4 -mt-7 relative z-10">
         {[
-          { label: 'Jobs Done', value: jobsDone, icon: null },
-          {
-            label: 'Rating',
-            value: (
-              <span className="flex items-center gap-1">
-                <Star className="w-4 h-4 text-warn fill-warn" aria-hidden />
-                {rating > 0 ? rating.toFixed(1) : '—'}
-              </span>
-            ),
-            icon: null,
-          },
-          { label: 'Exp. (yrs)', value: expYears > 0 ? expYears : '—', icon: null },
-        ].map(stat => (
-          <div
-            key={stat.label}
-            className="rounded-2xl bg-card border border-line p-3 text-center shadow-sm"
-          >
-            <p className="text-lg font-bold text-ink flex items-center justify-center">
+          { label: 'Jobs Done',  value: String(jobsDone) },
+          { label: 'Rating',     value: <>⭐ {Number(rating).toFixed(1)}</> },
+          { label: 'Exp. (yrs)', value: String(expYears) },
+        ].map((stat) => (
+          <div key={stat.label} className="rounded-2xl bg-card border border-line p-3.5 text-center shadow-lg">
+            <p className="text-lg font-bold text-ink flex items-center justify-center font-mono">
               {stat.value}
             </p>
             <p className="text-xs text-ink-3 mt-0.5">{stat.label}</p>
@@ -147,7 +156,6 @@ export default function Profile() {
 
       {/* ── Content sections ─────────────────────────────────────── */}
       <div className="p-4 space-y-4 animate-fade-up stagger-1">
-
         {saveError && <ErrorBanner message={saveError} />}
 
         {/* Active Trades */}
@@ -168,7 +176,7 @@ export default function Profile() {
               />
             ))}
           </div>
-          <p className="text-xs text-ink-3">At least 1 trade must remain selected.</p>
+          <p className="text-xs text-ink-3">At least 1 trade must remain selected to receive matches.</p>
         </Card>
 
         {/* Service Radius */}
@@ -185,10 +193,10 @@ export default function Profile() {
             step={1}
             value={radius}
             onChange={e => { setRadius(Number(e.target.value)); setSaveSuccess(false); }}
-            className="w-full accent-brand h-2 rounded-full cursor-pointer"
+            className="w-full accent-[var(--color-brand)] h-2 rounded-full cursor-pointer"
             aria-label="Service radius in km"
           />
-          <div className="flex justify-between text-xs text-ink-4">
+          <div className="flex justify-between text-xs text-ink-4 font-mono">
             <span>5 km</span>
             <span>30 km</span>
           </div>
@@ -196,13 +204,13 @@ export default function Profile() {
 
         {/* Save Button */}
         <Button
-          variant="secondary"
+          variant="primary"
           full
           loading={saving}
           onClick={handleSave}
-          icon={saveSuccess ? <CheckCircle2 className="w-4 h-4 text-money" /> : undefined}
+          icon={saveSuccess ? <CheckCircle2 className="w-4 h-4 text-white" /> : undefined}
         >
-          {saveSuccess ? 'Saved!' : 'Save Changes'}
+          {saveSuccess ? 'Changes Saved! ✓' : 'Save Changes'}
         </Button>
 
         {/* Linked Payout */}
@@ -213,10 +221,10 @@ export default function Profile() {
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-sm font-semibold text-ink">
-                {upiId ? 'UPI Account' : bankName ? 'Bank Account' : 'No payout linked'}
+                {upiId ? 'UPI Settlement' : bankName ? 'Bank Account' : 'No payout linked'}
               </p>
               <p className="text-xs text-ink-3 truncate font-mono mt-0.5">
-                {upiId ?? technicianProfile?.bank_account_number ?? 'Add in KYC settings'}
+                {upiId ?? technicianProfile?.bank_account_number ?? 'Configured during KYC'}
               </p>
             </div>
             {(upiId || technicianProfile?.bank_account_number) && (
@@ -230,7 +238,7 @@ export default function Profile() {
           variant="ghost"
           full
           icon={<LogOut className="w-4 h-4" />}
-          className="text-danger hover:text-danger hover:bg-danger-soft border border-danger/20 mt-2"
+          className="text-danger hover:text-danger hover:bg-danger-soft border border-danger/20"
           onClick={signOut}
         >
           Sign Out

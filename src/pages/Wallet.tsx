@@ -47,7 +47,7 @@ export default function Wallet() {
     setLedgerLoading(true);
     setLedgerError(null);
     const { data, error } = await supabase
-      .from('payout_transactions')
+      .from('technician_payouts')
       .select('*')
       .eq('technician_id', user.id)
       .order('created_at', { ascending: false })

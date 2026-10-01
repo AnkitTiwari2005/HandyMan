@@ -144,7 +144,7 @@ export interface NotificationItem {
   user_id: string;
   title: string;
   body: string;
-  type: 'booking' | 'support' | 'promo' | 'info';
+  type: 'booking' | 'support' | 'promo' | 'info' | 'kyc' | 'payout' | string;
   booking_id?: string;
   is_read: boolean;
   created_at: string;
