@@ -2,10 +2,11 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   TrendingUp, Wallet, Navigation, Clock, MapPin, WifiOff, Briefcase, ChevronRight,
+  AlertCircle, ShieldCheck, CheckCircle2,
 } from 'lucide-react';
 import {
   StatCard, MoneyDisplay, SectionHeader, Badge, SkeletonCard, Skeleton,
-  EmptyState, ErrorBanner, Card,
+  EmptyState, ErrorBanner, Card, StatusBadge, Button,
 } from '../components/ui';
 import { useAuthStore } from '../stores/authStore';
 import { useRadarStore } from '../stores/radarStore';
@@ -26,14 +27,17 @@ function JobCard({ job, onOpen }: { job: Booking; onOpen: () => void }) {
                  transition-all duration-200 active:scale-[0.98] hover:border-brand/40
                  hover:bg-card-2"
     >
-      {/* Top row: category badge + payout */}
+      {/* Top row: category & status badge + payout */}
       <div className="flex items-start justify-between gap-2">
-        {category && (
-          <span className="inline-flex items-center rounded-full bg-brand-soft border border-brand/20
-                           px-2.5 py-0.5 text-xs font-semibold text-brand capitalize">
-            {category}
-          </span>
-        )}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {category && (
+            <span className="inline-flex items-center rounded-full bg-brand-soft border border-brand/20
+                             px-2.5 py-0.5 text-xs font-semibold text-brand capitalize">
+              {category}
+            </span>
+          )}
+          <StatusBadge status={job.status} />
+        </div>
         <MoneyDisplay amount={payout} size="md" tone="money" className="ml-auto shrink-0" />
       </div>
 
@@ -59,6 +63,79 @@ function JobCard({ job, onOpen }: { job: Booking; onOpen: () => void }) {
   );
 }
 
+// ── AssignedJobBanner (High priority action required alert) ──────────────────
+function AssignedJobBanner({
+  job,
+  onStartTravel,
+  loading,
+}: {
+  job: Booking;
+  onStartTravel: () => void;
+  loading: boolean;
+}) {
+  const navigate = useNavigate();
+  const payout = payoutFor(job);
+  const city = job.address_snapshot?.city ?? '';
+
+  return (
+    <div className="w-full rounded-2xl bg-amber-500/10 border-2 border-amber-500/40 p-4 space-y-3 shadow-lg shadow-amber-500/5 animate-fade-up">
+      {/* Header pill + ref */}
+      <div className="flex items-center justify-between gap-2">
+        <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500 text-slate-950 px-2.5 py-0.5 text-[11px] font-black uppercase tracking-wider">
+          <AlertCircle className="w-3.5 h-3.5" />
+          Action Required: Assigned to You
+        </span>
+        <span className="font-mono text-xs font-bold text-amber-600 dark:text-amber-400">
+          #{job.booking_ref}
+        </span>
+      </div>
+
+      {/* Service & time details */}
+      <div>
+        <p className="text-lg font-bold text-ink leading-snug">
+          {job.services?.name ?? 'New Service Booking'}
+        </p>
+        <div className="flex items-center gap-3 text-xs text-ink-3 mt-1 flex-wrap">
+          <span className="flex items-center gap-1">
+            <Clock className="w-3.5 h-3.5 text-brand" />
+            {formatDay(job.scheduled_date)} · {job.scheduled_time?.slice(0, 5)}
+          </span>
+          {city && (
+            <span className="flex items-center gap-1">
+              <MapPin className="w-3.5 h-3.5 text-brand" />
+              {city}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Payout & Actions */}
+      <div className="flex items-center justify-between gap-3 pt-2.5 border-t border-amber-500/25">
+        <div>
+          <span className="text-[10px] text-ink-3 font-semibold uppercase tracking-wider block">Earnings</span>
+          <MoneyDisplay amount={payout} size="md" tone="money" />
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => navigate(`/job/${job.id}`)}
+            className="px-3.5 py-2 rounded-xl bg-card border border-line text-xs font-semibold text-ink hover:bg-card-2 transition-colors"
+          >
+            View
+          </button>
+          <button
+            onClick={onStartTravel}
+            disabled={loading}
+            className="px-4 py-2 rounded-xl gradient-brand text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-md shadow-brand/20 active:scale-95 transition-all"
+          >
+            <Navigation className="w-3.5 h-3.5" />
+            Start Heading
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── ActiveJobBanner ──────────────────────────────────────────────────────────
 function ActiveJobBanner({ job }: { job: Booking }) {
   const navigate = useNavigate();
@@ -69,7 +146,7 @@ function ActiveJobBanner({ job }: { job: Booking }) {
     <button
       onClick={() => navigate(`/job/${job.id}`)}
       className="w-full text-left rounded-2xl gradient-brand p-4 space-y-3
-                 active:scale-[0.99] transition-transform cursor-pointer"
+                 active:scale-[0.99] transition-transform cursor-pointer shadow-xl shadow-brand/20"
     >
       {/* Row 1: status pill + ref */}
       <div className="flex items-center justify-between gap-2">
@@ -117,7 +194,7 @@ export default function Dashboard() {
   const { technicianProfile, user, toggleOnlineStatus } = useAuthStore();
   const {
     activeJob, upcomingJobs, availableJobs, feedLoading, feedError,
-    connection, fetchAvailableJobs,
+    connection, fetchAvailableJobs, fetchMyJobs,
   } = useRadarStore();
 
   const isOnline = technicianProfile?.is_online ?? false;
@@ -125,6 +202,7 @@ export default function Dashboard() {
   // Today's earnings ─────────────────────────────────────────────────────────
   const [todayEarnings, setTodayEarnings] = useState<number | null>(null);
   const [toggleError, setToggleError] = useState<string | null>(null);
+  const [startingTravelId, setStartingTravelId] = useState<string | null>(null);
 
   const loadTodayEarnings = async () => {
     if (!user?.id) return;
@@ -155,8 +233,38 @@ export default function Dashboard() {
     if (!result.ok) setToggleError(result.message ?? 'Could not change status.');
   };
 
-  // Counts for section header
-  const feedCount = availableJobs.length;
+  // Start travel directly from assigned banner
+  const handleStartTravelFromBanner = async (jobId: string) => {
+    if (!user?.id) return;
+    setStartingTravelId(jobId);
+    try {
+      const { data, error } = await supabase.rpc('start_travel', { p_booking_id: jobId });
+      const res = data as { success: boolean; message: string } | null;
+
+      if (error || (res && !res.success)) {
+        await supabase
+          .from('bookings')
+          .update({ status: 'on_the_way', updated_at: new Date().toISOString() })
+          .eq('id', jobId)
+          .eq('technician_id', user.id);
+      }
+
+      await fetchMyJobs(user.id);
+      navigate(`/job/${jobId}`);
+    } catch {
+      navigate(`/job/${jobId}`);
+    } finally {
+      setStartingTravelId(null);
+    }
+  };
+
+  // Separate assigned jobs (action required) from normal upcoming jobs
+  const assignedJobs = upcomingJobs.filter((j) => j.status === 'assigned');
+  const normalUpcomingJobs = upcomingJobs.filter((j) => j.status !== 'assigned');
+
+  // Defensive filtering: Open jobs must never have a technician assigned or non-confirmed status
+  const safeAvailableJobs = availableJobs.filter((j) => !j.technician_id && j.status === 'confirmed');
+  const feedCount = safeAvailableJobs.length;
 
   return (
     <div className="p-4 space-y-5 pb-nav">
@@ -181,6 +289,20 @@ export default function Dashboard() {
         />
       </div>
 
+      {/* ── Assigned jobs alert section (New jobs assigned by admin) ──── */}
+      {assignedJobs.length > 0 && (
+        <div className="space-y-3">
+          {assignedJobs.map((job) => (
+            <AssignedJobBanner
+              key={job.id}
+              job={job}
+              loading={startingTravelId === job.id}
+              onStartTravel={() => handleStartTravelFromBanner(job.id)}
+            />
+          ))}
+        </div>
+      )}
+
       {/* ── Active job banner ─────────────────────────────────────────── */}
       {activeJob && (
         <div className="animate-fade-up stagger-1">
@@ -189,7 +311,7 @@ export default function Dashboard() {
       )}
 
       {/* ── Upcoming jobs ─────────────────────────────────────────────── */}
-      {upcomingJobs.length > 0 && (
+      {normalUpcomingJobs.length > 0 && (
         <div className="space-y-3 animate-fade-up stagger-2">
           <SectionHeader
             title="Upcoming"
@@ -203,14 +325,17 @@ export default function Dashboard() {
             }
           />
           <div className="space-y-2.5">
-            {upcomingJobs.slice(0, 2).map((j) => (
+            {normalUpcomingJobs.slice(0, 2).map((j) => (
               <Card
                 key={j.id}
                 onClick={() => navigate(`/job/${j.id}`)}
                 className="p-4"
               >
                 <div className="flex items-start justify-between gap-2">
-                  <p className="font-semibold text-ink truncate flex-1">{j.services?.name ?? 'Job'}</p>
+                  <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                    <p className="font-semibold text-ink truncate">{j.services?.name ?? 'Job'}</p>
+                    <StatusBadge status={j.status} />
+                  </div>
                   <span className="text-money font-semibold text-sm shrink-0">
                     +{/* MoneyDisplay inline */}
                     <MoneyDisplay amount={payoutFor(j)} size="sm" tone="money" />
@@ -271,7 +396,7 @@ export default function Dashboard() {
               <ErrorBanner message={feedError} onRetry={fetchAvailableJobs} />
             )}
 
-            {feedLoading && availableJobs.length === 0 && (
+            {feedLoading && safeAvailableJobs.length === 0 && (
               <div className="space-y-3">
                 <SkeletonCard lines={3} />
                 <SkeletonCard lines={3} />
@@ -279,7 +404,7 @@ export default function Dashboard() {
               </div>
             )}
 
-            {!feedLoading && !feedError && availableJobs.length === 0 && (
+            {!feedLoading && !feedError && safeAvailableJobs.length === 0 && (
               <EmptyState
                 icon={<Briefcase className="w-6 h-6" />}
                 title="No open jobs right now"
@@ -291,9 +416,9 @@ export default function Dashboard() {
               />
             )}
 
-            {availableJobs.length > 0 && (
+            {safeAvailableJobs.length > 0 && (
               <div className="space-y-3">
-                {availableJobs.map((job) => (
+                {safeAvailableJobs.map((job) => (
                   <JobCard
                     key={job.id}
                     job={job}

@@ -183,8 +183,16 @@ export const useRadarStore = create<RadarState>((set, get) => ({
         if ((u.technician_id && u.technician_id !== technicianId) || u.status === 'cancelled') {
           dropFromQueues(u.id);
         }
-        // Changes to my own jobs.
-        if (u.technician_id === technicianId) void get().fetchMyJobs(technicianId);
+        // Changes to my own jobs (or newly assigned to me):
+        if (u.technician_id === technicianId) {
+          dropFromQueues(u.id); // ALWAYS drop from open/available queues!
+          void get().fetchMyJobs(technicianId);
+          void get().fetchAvailableJobs(); // refresh available feed immediately
+          if (u.status === 'assigned') {
+            playSuccessChime();
+            void triggerHapticNotification();
+          }
+        }
       })
       .subscribe((status) => {
         if (status === 'SUBSCRIBED') {

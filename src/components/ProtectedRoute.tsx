@@ -1,12 +1,15 @@
-import { useEffect } from 'react';
-import { Navigate, Outlet, useLocation } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/authStore';
 import { useRadarStore } from '../stores/radarStore';
+import { supabase } from '../lib/supabase';
+import { playRadarAlertTone, playSuccessChime } from '../lib/audio';
+import { triggerHapticNotification } from '../lib/haptics';
 import Navbar from './Navbar';
 import BottomNav from './BottomNav';
 import IncomingJobModal from './IncomingJobModal';
 import { ErrorBanner, Skeleton } from './ui';
-import { Wrench } from 'lucide-react';
+import { Wrench, Bell, X, ArrowRight } from 'lucide-react';
 
 // ── Full-screen loader (only on first load, never on refresh) ─
 function FullScreenLoader() {
@@ -69,11 +72,108 @@ function useRadarLifecycle() {
   }, [online, updateLocation]);
 }
 
+interface InAppAlert {
+  id: string;
+  title: string;
+  body: string;
+  booking_id?: string;
+}
+
 // ── Protected Route ────────────────────────────────────────────
 export const ProtectedRoute = () => {
+  const navigate = useNavigate();
   const { user, technicianProfile, isLoading, profileLoadedFor, profileError } = useAuthStore();
   const location = useLocation();
+  const { fetchMyJobs, fetchAvailableJobs } = useRadarStore();
+
+  const [inAppAlert, setInAppAlert] = useState<InAppAlert | null>(null);
+
   useRadarLifecycle();
+
+  // ── Global real-time listener for incoming notifications & job assignments ──
+  useEffect(() => {
+    if (!user?.id) return;
+
+    // 1. Listen for new notifications specifically for this partner
+    const notifChannel = supabase
+      .channel(`global-partner-notifs-${user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'notifications',
+          filter: `user_id=eq.${user.id}`,
+        },
+        (payload) => {
+          const item = payload.new as {
+            id: string;
+            title: string;
+            body?: string;
+            message?: string;
+            booking_id?: string;
+          };
+          playRadarAlertTone();
+          void triggerHapticNotification();
+
+          setInAppAlert({
+            id: item.id,
+            title: item.title || 'New Notification',
+            body: item.body || item.message || '',
+            booking_id: item.booking_id,
+          });
+
+          // Refresh jobs if it's booking related
+          void fetchMyJobs(user.id);
+          void fetchAvailableJobs();
+        }
+      )
+      .subscribe();
+
+    // 2. Listen for booking assignment updates
+    const bookingChannel = supabase
+      .channel(`global-assigned-bookings-${user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'bookings',
+          filter: `technician_id=eq.${user.id}`,
+        },
+        (payload) => {
+          const updated = payload.new as { id: string; status: string; booking_ref: string };
+          void fetchMyJobs(user.id);
+          void fetchAvailableJobs();
+
+          if (updated.status === 'assigned') {
+            playRadarAlertTone();
+            void triggerHapticNotification();
+            setInAppAlert({
+              id: updated.id,
+              title: 'New Job Assigned!',
+              body: `Booking #${updated.booking_ref} has been assigned to you. Tap to view location and travel.`,
+              booking_id: updated.id,
+            });
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(notifChannel);
+      void supabase.removeChannel(bookingChannel);
+    };
+  }, [user?.id, fetchMyJobs, fetchAvailableJobs]);
+
+  // Auto-dismiss alert after 7 seconds
+  useEffect(() => {
+    if (!inAppAlert) return;
+    const timer = setTimeout(() => {
+      setInAppAlert(null);
+    }, 7000);
+    return () => clearTimeout(timer);
+  }, [inAppAlert]);
 
   // Only the very first load shows the full-screen loader
   if (isLoading || (user && profileLoadedFor !== user.id)) return <FullScreenLoader />;
@@ -103,6 +203,38 @@ export const ProtectedRoute = () => {
 
   return (
     <div className="min-h-dvh bg-bg text-ink flex flex-col max-w-lg mx-auto relative">
+      {/* ── Sliding in-app notification banner ────────────────────── */}
+      {inAppAlert && (
+        <div className="fixed top-16 left-3 right-3 z-50 max-w-lg mx-auto animate-fade-down pointer-events-auto">
+          <div className="bg-card/95 backdrop-blur-md border-2 border-brand/50 shadow-2xl shadow-brand/20 rounded-2xl p-3.5 flex items-start gap-3">
+            <div className="w-9 h-9 rounded-xl bg-brand text-white flex items-center justify-center shrink-0 shadow-md shadow-brand/30">
+              <Bell className="w-5 h-5 animate-pulse" />
+            </div>
+            <div
+              className="flex-1 min-w-0 cursor-pointer"
+              onClick={() => {
+                if (inAppAlert.booking_id) navigate(`/job/${inAppAlert.booking_id}`);
+                else navigate('/notifications');
+                setInAppAlert(null);
+              }}
+            >
+              <div className="flex items-center gap-1.5">
+                <p className="text-xs font-bold text-ink leading-tight">{inAppAlert.title}</p>
+                <ArrowRight className="w-3 h-3 text-brand shrink-0" />
+              </div>
+              <p className="text-xs text-ink-3 leading-snug line-clamp-2 mt-0.5">{inAppAlert.body}</p>
+            </div>
+            <button
+              onClick={() => setInAppAlert(null)}
+              className="p-1 rounded-lg text-ink-3 hover:text-ink hover:bg-card-2 shrink-0 transition-colors"
+              aria-label="Dismiss alert"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
       <Navbar />
       <main className="flex-1 pb-nav">
         <Outlet />
