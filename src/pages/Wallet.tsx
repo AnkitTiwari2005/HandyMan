@@ -62,6 +62,11 @@ export default function Wallet() {
 
   useEffect(() => { fetchLedger(); }, [fetchLedger]);
 
+  // Refresh wallet balance from DB whenever this page is opened
+  useEffect(() => {
+    if (user?.id) void fetchProfiles(user.id);
+  }, [user?.id, fetchProfiles]);
+
   // ── derived: total earned (sum of job_payout + incentive) ─────
   const totalEarned = ledger
     .filter(t => t.type === 'job_payout' || t.type === 'incentive')

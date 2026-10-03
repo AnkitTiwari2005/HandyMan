@@ -23,45 +23,53 @@ function JobCard({ job, onOpen }: { job: Booking; onOpen: () => void }) {
   return (
     <button
       onClick={onOpen}
-      className="w-full text-left rounded-2xl bg-card border border-line p-4 space-y-3
-                 transition-all duration-200 active:scale-[0.98] hover:border-brand/40
-                 hover:bg-card-2"
+      className="w-full text-left rounded-2xl bg-card border border-line overflow-hidden
+                 transition-all duration-200 active:scale-[0.98] hover:border-brand/35 hover:bg-card-2
+                 group"
     >
-      {/* Top row: category & status badge + payout */}
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex items-center gap-1.5 flex-wrap">
-          {category && (
+      {/* Top accent line */}
+      <div className="h-0.5 w-full bg-gradient-to-r from-brand/60 via-brand/20 to-transparent" />
+
+      <div className="p-4 space-y-2.5">
+        {/* Row 1: category badge + payout pill */}
+        <div className="flex items-center justify-between gap-2">
+          {category ? (
             <span className="inline-flex items-center rounded-full bg-brand-soft border border-brand/20
-                             px-2.5 py-0.5 text-xs font-semibold text-brand capitalize">
+                             px-2.5 py-0.5 text-[11px] font-bold text-brand uppercase tracking-wide">
               {category}
             </span>
+          ) : (
+            <span />
           )}
-          <StatusBadge status={job.status} />
-        </div>
-        <MoneyDisplay amount={payout} size="md" tone="money" className="ml-auto shrink-0" />
-      </div>
-
-      {/* Service name */}
-      <p className="font-semibold text-ink truncate">
-        {job.services?.name ?? 'Service'}
-      </p>
-
-      {/* Bottom row: time + city */}
-      <div className="flex items-center gap-4 text-xs text-ink-3">
-        <span className="flex items-center gap-1">
-          <Clock className="w-3.5 h-3.5 shrink-0" />
-          {formatDay(job.scheduled_date)}&nbsp;·&nbsp;{job.scheduled_time?.slice(0, 5)}
-        </span>
-        {city && (
-          <span className="flex items-center gap-1 truncate">
-            <MapPin className="w-3.5 h-3.5 shrink-0" />
-            {city}
+          <span className="inline-flex items-center rounded-full bg-money-soft border border-money/25
+                           px-3 py-0.5 text-sm font-bold text-money">
+            <MoneyDisplay amount={payout} size="sm" tone="money" />
           </span>
-        )}
+        </div>
+
+        {/* Service name */}
+        <p className="text-base font-bold text-ink leading-snug truncate group-hover:text-white transition-colors">
+          {job.services?.name ?? 'Service'}
+        </p>
+
+        {/* Footer: time + city */}
+        <div className="flex items-center gap-3 text-xs text-ink-3 pt-1 border-t border-line">
+          <span className="flex items-center gap-1.5">
+            <Clock className="w-3.5 h-3.5 shrink-0 text-brand/70" />
+            {formatDay(job.scheduled_date)}&nbsp;·&nbsp;{job.scheduled_time?.slice(0, 5)}
+          </span>
+          {city && (
+            <span className="flex items-center gap-1.5 truncate">
+              <MapPin className="w-3.5 h-3.5 shrink-0 text-brand/70" />
+              {city}
+            </span>
+          )}
+        </div>
       </div>
     </button>
   );
 }
+
 
 // ── AssignedJobBanner (High priority action required alert) ──────────────────
 function AssignedJobBanner({

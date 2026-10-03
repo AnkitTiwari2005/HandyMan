@@ -211,7 +211,7 @@ function PhotoUploaderBox({
 export default function JobDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { user } = useAuthStore();
+  const { user, fetchProfiles } = useAuthStore();
   const { fetchMyJobs } = useRadarStore();
 
   const [booking, setBooking] = useState<Booking | null>(null);
@@ -270,7 +270,7 @@ export default function JobDetail() {
       }
     }
     setLoadingBooking(false);
-  }, [id, proofBeforePreview, proofAfterPreview, techNotes]);
+  }, [id]);
 
   useEffect(() => {
     void fetchBooking();
@@ -535,6 +535,9 @@ export default function JobDetail() {
       playSuccessChime();
       void triggerHapticNotification();
 
+      // 8. Refresh store so wallet balance shows updated immediately
+      if (user?.id) void fetchProfiles(user.id);
+
       void fetchBooking(true);
       void fetchMyJobs(user.id);
       setShowConfirmComplete(false);
@@ -601,7 +604,8 @@ export default function JobDetail() {
   const currentStep = stepIndex(booking.status);
   const isCompleted = booking.status === 'completed';
   const isCancelled = booking.status === 'cancelled';
-  const canDirectComplete = !isCompleted && !isCancelled;
+  // Completion card only shows when work is actively in progress
+  const canDirectComplete = booking.status === 'in_progress';
 
   return (
     <>
@@ -811,30 +815,47 @@ export default function JobDetail() {
               </div>
             )}
 
-            {/* Step 2: on_the_way → enter OTP or start work */}
+            {/* Step 2: on_the_way → premium arrival confirmation card */}
             {booking.status === 'on_the_way' && (
-              <div className="space-y-2.5">
-                <Button
-                  size="lg"
-                  full
-                  onClick={() => setOtpModalOpen(true)}
-                  className="bg-money-soft border border-money text-money
-                             min-h-14 rounded-2xl text-base font-semibold
-                             inline-flex items-center justify-center gap-2.5
-                             active:scale-[0.97] transition-all"
-                >
-                  <ShieldCheck className="w-5 h-5" />
-                  I've Arrived · Enter OTP
-                </Button>
-                <div className="flex items-center justify-between px-1">
-                  <span className="text-xs text-ink-3">Ask customer for start OTP</span>
+              <div className="rounded-2xl border-2 border-money/30 bg-money-soft overflow-hidden">
+                {/* Header */}
+                <div className="px-4 pt-4 pb-3 flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-money/15 border border-money/30 flex items-center justify-center shrink-0">
+                    <ShieldCheck className="w-5 h-5 text-money" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold text-ink">I've Arrived at Location</p>
+                    <p className="text-xs text-ink-3 leading-snug">Ask the customer for their 4-digit OTP to begin work</p>
+                  </div>
+                </div>
+
+                {/* Primary OTP button */}
+                <div className="px-4 pb-3">
+                  <button
+                    type="button"
+                    onClick={() => setOtpModalOpen(true)}
+                    className="w-full flex items-center justify-between gap-3 bg-money text-white
+                               rounded-xl px-4 py-3.5 font-semibold text-sm
+                               active:scale-[0.98] transition-all shadow-lg shadow-money/20"
+                  >
+                    <span className="flex items-center gap-2">
+                      <ShieldCheck className="w-4.5 h-4.5" />
+                      Enter Customer OTP
+                    </span>
+                    <span className="text-white/70 text-xs font-mono tracking-widest">- - - -</span>
+                  </button>
+                </div>
+
+                {/* Divider + bypass */}
+                <div className="border-t border-money/20 px-4 py-3 flex items-center justify-between">
+                  <span className="text-xs text-ink-3">Customer doesn't have OTP?</span>
                   <button
                     type="button"
                     onClick={handleDirectStartWork}
                     disabled={actionLoading}
-                    className="text-xs text-brand hover:text-brand/80 font-semibold"
+                    className="text-xs text-brand font-semibold hover:text-brand/80 transition-colors disabled:opacity-50"
                   >
-                    Bypass OTP & Start Work →
+                    Start Work Directly
                   </button>
                 </div>
               </div>
